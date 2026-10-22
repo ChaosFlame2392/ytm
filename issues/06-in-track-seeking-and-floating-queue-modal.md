@@ -1,6 +1,6 @@
 # Issue 06: In-Track Seeking & NVIM-Style Floating Queue Modal
 
-**Labels:** `ready-for-agent`
+**Labels:** `completed`
 
 ## Problem Statement
 
