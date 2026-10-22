@@ -1,8 +1,12 @@
+pub mod app;
 pub mod cache;
 pub mod mpv;
 pub mod playlist;
 pub mod prefetch;
 pub mod queue;
+pub mod ui;
+
+pub use app::App;
 
 pub use cache::{
     AudioCache, AudioSource, PruneReport, DEFAULT_MAX_CACHE_BYTES, DEFAULT_TARGET_CACHE_BYTES,
@@ -14,5 +18,11 @@ pub use mpv::{
 pub use playlist::{PlaylistManager, Track};
 pub use prefetch::{AudioDownloader, AudioPrefetcher, YtDlpDownloader};
 pub use queue::Queue;
+pub use ui::{
+    format_line1, format_line2, format_time, parse_key_event, render_status_bar,
+    setup_signal_handler, truncate_to_width, wipe_status_lines, KeyAction, StatusState,
+    TerminalGuard,
+};
+
 
 
