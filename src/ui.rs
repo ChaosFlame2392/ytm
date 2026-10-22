@@ -174,6 +174,11 @@ pub enum ModalKeyAction {
     Commit,
     Close,
     Quit,
+    SearchActivate,
+    SearchChar(char),
+    SearchBackspace,
+    SearchResolve,
+    SearchAbort,
 }
 
 /// Parses a crossterm KeyEvent into a semantic player action in normal mode.
@@ -203,7 +208,7 @@ pub fn parse_key_event(event: KeyEvent) -> Option<KeyAction> {
     }
 }
 
-/// Parses a crossterm KeyEvent into a semantic modal action when the queue modal is open.
+/// Parses a crossterm KeyEvent into a semantic modal action when the queue modal is open in browsing mode.
 pub fn parse_modal_key_event(event: KeyEvent) -> Option<ModalKeyAction> {
     if event.kind == KeyEventKind::Release {
         return None;
@@ -217,12 +222,39 @@ pub fn parse_modal_key_event(event: KeyEvent) -> Option<ModalKeyAction> {
     }
 
     match event.code {
+        KeyCode::Char('/') => Some(ModalKeyAction::SearchActivate),
         KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down => Some(ModalKeyAction::CursorDown),
         KeyCode::Char('k') | KeyCode::Char('K') | KeyCode::Up => Some(ModalKeyAction::CursorUp),
         KeyCode::Enter => Some(ModalKeyAction::Commit),
         KeyCode::Tab | KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => {
             Some(ModalKeyAction::Close)
         }
+        _ => None,
+    }
+}
+
+/// Parses a crossterm KeyEvent into a semantic modal action when modal search mode is active.
+pub fn parse_modal_search_key_event(event: KeyEvent) -> Option<ModalKeyAction> {
+    if event.kind == KeyEventKind::Release {
+        return None;
+    }
+
+    if event.modifiers.contains(KeyModifiers::CONTROL) {
+        match event.code {
+            KeyCode::Char('c') | KeyCode::Char('C') => return Some(ModalKeyAction::Quit),
+            KeyCode::Char('j') | KeyCode::Char('J') => return Some(ModalKeyAction::CursorDown),
+            KeyCode::Char('k') | KeyCode::Char('K') => return Some(ModalKeyAction::CursorUp),
+            _ => return None,
+        }
+    }
+
+    match event.code {
+        KeyCode::Down | KeyCode::Char('j') => Some(ModalKeyAction::CursorDown),
+        KeyCode::Up | KeyCode::Char('k') => Some(ModalKeyAction::CursorUp),
+        KeyCode::Enter => Some(ModalKeyAction::SearchResolve),
+        KeyCode::Esc => Some(ModalKeyAction::SearchAbort),
+        KeyCode::Backspace => Some(ModalKeyAction::SearchBackspace),
+        KeyCode::Char(c) => Some(ModalKeyAction::SearchChar(c)),
         _ => None,
     }
 }
@@ -336,6 +368,13 @@ pub struct ModalState {
     pub is_open: bool,
     pub viewer_cursor: usize,
     pub viewport_offset: usize,
+    pub search_active: bool,
+    pub search_query: String,
+    pub search_cursor: usize,
+    pub search_viewport_offset: usize,
+    pub filtered_indices: Vec<usize>,
+    pub prior_viewer_cursor: usize,
+    pub prior_viewport_offset: usize,
 }
 
 impl ModalState {
@@ -346,6 +385,11 @@ impl ModalState {
     /// Opens the modal anchored and centered on the active track index.
     pub fn open(&mut self, active_cursor: usize, total_items: usize, content_height: usize) {
         self.is_open = true;
+        self.search_active = false;
+        self.search_query.clear();
+        self.filtered_indices.clear();
+        self.search_cursor = 0;
+        self.search_viewport_offset = 0;
         self.viewer_cursor = if total_items == 0 {
             0
         } else {
@@ -359,6 +403,124 @@ impl ModalState {
     /// Closes the modal.
     pub fn close(&mut self) {
         self.is_open = false;
+        self.search_active = false;
+        self.search_query.clear();
+        self.filtered_indices.clear();
+        self.search_cursor = 0;
+        self.search_viewport_offset = 0;
+    }
+
+    /// Starts search mode, saving prior cursor positions and initializing filtered indices.
+    pub fn start_search(&mut self, queue: &crate::queue::Queue) {
+        self.search_active = true;
+        self.search_query.clear();
+        self.prior_viewer_cursor = self.viewer_cursor;
+        self.prior_viewport_offset = self.viewport_offset;
+        self.filtered_indices = (0..queue.playback_order.len()).collect();
+        self.search_cursor = 0;
+        self.search_viewport_offset = 0;
+    }
+
+    /// Appends a character to the search query and live-filters tracks by title.
+    pub fn append_search_char(&mut self, c: char, queue: &crate::queue::Queue, content_height: usize) {
+        self.search_query.push(c);
+        self.recompute_search_filter(queue, content_height);
+    }
+
+    /// Removes the last character from the search query and live-filters tracks.
+    pub fn pop_search_char(&mut self, queue: &crate::queue::Queue, content_height: usize) {
+        self.search_query.pop();
+        self.recompute_search_filter(queue, content_height);
+    }
+
+    /// Recomputes `filtered_indices` from `search_query` and adjusts `search_cursor` & viewport.
+    pub fn recompute_search_filter(&mut self, queue: &crate::queue::Queue, content_height: usize) {
+        let q = self.search_query.to_lowercase();
+        self.filtered_indices = queue
+            .playback_order
+            .iter()
+            .enumerate()
+            .filter_map(|(item_idx, &track_idx)| {
+                let track = &queue.tracks[track_idx];
+                if q.is_empty() || track.title.to_lowercase().contains(&q) {
+                    Some(item_idx)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if self.filtered_indices.is_empty() {
+            self.search_cursor = 0;
+            self.search_viewport_offset = 0;
+        } else {
+            if self.search_cursor >= self.filtered_indices.len() {
+                self.search_cursor = self.filtered_indices.len().saturating_sub(1);
+            }
+            self.adjust_search_viewport_for_cursor(content_height);
+        }
+    }
+
+    /// Moves search cursor down by one row and updates search viewport scrolling.
+    pub fn move_search_down(&mut self, content_height: usize) {
+        if self.filtered_indices.is_empty() {
+            return;
+        }
+        if self.search_cursor + 1 < self.filtered_indices.len() {
+            self.search_cursor += 1;
+            self.adjust_search_viewport_for_cursor(content_height);
+        }
+    }
+
+    /// Moves search cursor up by one row and updates search viewport scrolling.
+    pub fn move_search_up(&mut self, content_height: usize) {
+        if self.search_cursor > 0 {
+            self.search_cursor -= 1;
+            self.adjust_search_viewport_for_cursor(content_height);
+        }
+    }
+
+    /// Adjusts search viewport offset to keep `search_cursor` in visible area.
+    pub fn adjust_search_viewport_for_cursor(&mut self, content_height: usize) {
+        let track_rows = content_height.saturating_sub(1);
+        if track_rows == 0 {
+            return;
+        }
+        if self.search_cursor < self.search_viewport_offset {
+            self.search_viewport_offset = self.search_cursor;
+        } else if self.search_cursor >= self.search_viewport_offset + track_rows {
+            self.search_viewport_offset = self.search_cursor + 1 - track_rows;
+        }
+        if self.filtered_indices.len() <= track_rows {
+            self.search_viewport_offset = 0;
+        } else if self.search_viewport_offset + track_rows > self.filtered_indices.len() {
+            self.search_viewport_offset = self.filtered_indices.len() - track_rows;
+        }
+    }
+
+    /// Resolves search on the highlighted match: exits search mode, centers viewer cursor on that song in full queue.
+    pub fn resolve_search(&mut self, total_items: usize, content_height: usize) -> Option<usize> {
+        if self.filtered_indices.is_empty() {
+            return None;
+        }
+        let resolved_queue_idx = self.filtered_indices[self.search_cursor];
+        self.search_active = false;
+        self.search_query.clear();
+        self.filtered_indices.clear();
+        self.viewer_cursor = resolved_queue_idx;
+        let half = content_height / 2;
+        self.viewport_offset = self.viewer_cursor.saturating_sub(half);
+        self.clamp_viewport(total_items, content_height);
+        Some(resolved_queue_idx)
+    }
+
+    /// Cancels search mode, restoring the prior viewer cursor and viewport offset.
+    pub fn abort_search(&mut self) {
+        self.search_active = false;
+        self.search_query.clear();
+        self.filtered_indices.clear();
+        self.viewer_cursor = self.prior_viewer_cursor;
+        self.viewport_offset = self.prior_viewport_offset;
     }
 
     /// Moves the viewer cursor down by one row and updates viewport scrolling.
@@ -417,7 +579,13 @@ pub fn format_modal_lines(
     let mut lines = Vec::with_capacity(rect.height as usize);
 
     // 1. Top border with Header: [current/total]
-    let badge = if total_items == 0 {
+    let badge = if modal.search_active {
+        if modal.filtered_indices.is_empty() {
+            "[0/0]".to_string()
+        } else {
+            format!("[{}/{}]", modal.search_cursor + 1, modal.filtered_indices.len())
+        }
+    } else if total_items == 0 {
         "[0/0]".to_string()
     } else {
         format!("[{}/{}]", modal.viewer_cursor + 1, total_items)
@@ -446,7 +614,60 @@ pub fn format_modal_lines(
     lines.push(top_border);
 
     // 2. Content rows
-    if total_items == 0 {
+    if modal.search_active {
+        if content_height > 0 {
+            let prompt = format!(" Search: {}", modal.search_query);
+            let prompt_chars = prompt.chars().count();
+            let padding = content_width.saturating_sub(prompt_chars);
+            lines.push(format!("│{}{}│", prompt, " ".repeat(padding)));
+        }
+        let track_rows = content_height.saturating_sub(1);
+        if modal.filtered_indices.is_empty() {
+            for row in 0..track_rows {
+                if row == 0 {
+                    let msg = "  [No matching tracks]";
+                    let msg_chars = msg.chars().count();
+                    let padding = content_width.saturating_sub(msg_chars);
+                    lines.push(format!("│{}{}│", msg, " ".repeat(padding)));
+                } else {
+                    lines.push(format!("│{}│", " ".repeat(content_width)));
+                }
+            }
+        } else {
+            for row in 0..track_rows {
+                let match_index = modal.search_viewport_offset + row;
+                if match_index < modal.filtered_indices.len() {
+                    let queue_idx = modal.filtered_indices[match_index];
+                    let track_idx = queue.playback_order[queue_idx];
+                    let track = &queue.tracks[track_idx];
+                    let is_active = queue_idx == queue.cursor;
+                    let is_cursor = match_index == modal.search_cursor;
+
+                    let active_marker = if is_active { "▶ " } else { "  " };
+                    let num_str = format!("{:>3}. ", queue_idx + 1);
+                    let prefix = format!(" {}{}", active_marker, num_str);
+                    let prefix_len = prefix.chars().count();
+
+                    let avail_title_len = content_width.saturating_sub(prefix_len + 1);
+                    let title = truncate_to_width(&track.title, avail_title_len);
+
+                    let mut row_content = format!("{}{}", prefix, title);
+                    let content_chars = row_content.chars().count();
+                    if content_chars < content_width {
+                        row_content.push_str(&" ".repeat(content_width - content_chars));
+                    }
+
+                    if is_cursor {
+                        lines.push(format!("│\x1b[7m{}\x1b[0m│", row_content));
+                    } else {
+                        lines.push(format!("│{}│", row_content));
+                    }
+                } else {
+                    lines.push(format!("│{}│", " ".repeat(content_width)));
+                }
+            }
+        }
+    } else if total_items == 0 {
         for row in 0..content_height {
             if row == 0 {
                 let msg = "  (Queue is empty)";
@@ -492,7 +713,18 @@ pub fn format_modal_lines(
     }
 
     // 3. Bottom border with Footer hints
-    let footer_text = " Enter: Play │ j/k: Scroll │ Tab/q/Esc: Close ";
+    let (footer_text, short_footer) = if modal.search_active {
+        (
+            " Enter: Resolve │ j/k: Scroll │ Esc: Cancel ",
+            " Enter: Resolve │ Esc: Cancel ",
+        )
+    } else {
+        (
+            " Enter: Play │ j/k: Scroll │ Tab/q/Esc: Close ",
+            " Enter: Play │ Esc: Close ",
+        )
+    };
+
     let bottom_border = if width <= 2 {
         "╰╯".to_string()
     } else {
@@ -505,22 +737,19 @@ pub fn format_modal_lines(
             s.push_str(&"─".repeat(remaining));
             s.push('╯');
             s
+        } else if short_footer.chars().count() + 2 <= inner_width {
+            let mut s = String::from("╰─");
+            s.push_str(short_footer);
+            let used = 1 + short_footer.chars().count();
+            let remaining = inner_width.saturating_sub(used);
+            s.push_str(&"─".repeat(remaining));
+            s.push('╯');
+            s
         } else {
-            let short_footer = " Enter: Play │ Esc: Close ";
-            if short_footer.chars().count() + 2 <= inner_width {
-                let mut s = String::from("╰─");
-                s.push_str(short_footer);
-                let used = 1 + short_footer.chars().count();
-                let remaining = inner_width.saturating_sub(used);
-                s.push_str(&"─".repeat(remaining));
-                s.push('╯');
-                s
-            } else {
-                let mut s = String::from("╰");
-                s.push_str(&"─".repeat(inner_width));
-                s.push('╯');
-                s
-            }
+            let mut s = String::from("╰");
+            s.push_str(&"─".repeat(inner_width));
+            s.push('╯');
+            s
         }
     };
     lines.push(bottom_border);

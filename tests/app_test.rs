@@ -828,4 +828,139 @@ fn test_app_modal_jump_in_shuffled_queue() {
     responder.join().unwrap();
 }
 
+#[test]
+fn test_app_modal_search_flow_live_filtering_navigation_and_resolution() {
+    let (mut app, mut server, _) = setup_test_app();
+
+    // App has 3 tracks: vid_0 "Track Zero", vid_1 "Track One", vid_2 "Track Two"
+    assert_eq!(app.queue.cursor, 0);
+
+    // Open modal
+    app.handle_action(KeyAction::OpenModal).unwrap();
+    assert!(app.modal.is_open);
+    assert_eq!(app.modal.viewer_cursor, 0);
+
+    // Press '/' to activate search mode
+    app.handle_modal_action(ModalKeyAction::SearchActivate).unwrap();
+    assert!(app.modal.search_active);
+    assert_eq!(app.modal.filtered_indices.len(), 3);
+
+    // Type "Two" -> live filters to vid_2
+    for c in "Two".chars() {
+        app.handle_modal_action(ModalKeyAction::SearchChar(c)).unwrap();
+    }
+    assert_eq!(app.modal.search_query, "Two");
+    assert_eq!(app.modal.filtered_indices, vec![2]);
+    assert_eq!(app.modal.search_cursor, 0);
+
+    // Backspace: delete 'o' and 'w', then type "e" -> "Te" matches "Track Zero" (0) and "Track One" (1)
+    app.handle_modal_action(ModalKeyAction::SearchBackspace).unwrap();
+    app.handle_modal_action(ModalKeyAction::SearchBackspace).unwrap();
+    app.handle_modal_action(ModalKeyAction::SearchBackspace).unwrap(); // empty
+    for c in "e".chars() {
+        app.handle_modal_action(ModalKeyAction::SearchChar(c)).unwrap();
+    }
+    // "Track Zero" (idx 0) and "Track One" (idx 1) both contain 'e'
+    assert_eq!(app.modal.filtered_indices, vec![0, 1]);
+    assert_eq!(app.modal.search_cursor, 0);
+
+    // Navigate with Down / j
+    app.handle_modal_action(ModalKeyAction::CursorDown).unwrap();
+    assert_eq!(app.modal.search_cursor, 1); // points to idx 1 ("Track One")
+
+    // Press Enter to resolve search
+    // This must exit search mode, restore full queue view, and center viewer_cursor on idx 1
+    app.handle_modal_action(ModalKeyAction::SearchResolve).unwrap();
+    assert!(!app.modal.search_active, "Search mode must be closed");
+    assert!(app.modal.is_open, "Modal itself must remain open");
+    assert_eq!(app.modal.viewer_cursor, 1, "Viewer cursor must be on resolved track");
+    // Notice: playback has NOT changed yet (still on 0)
+    assert_eq!(app.queue.cursor, 0);
+
+    // Now press Enter in normal modal to commit playback to hovered track (idx 1)
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+        let mut line = String::new();
+
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "loadfile");
+        assert!(val["command"][1].as_str().unwrap().contains("vid_1"));
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    app.handle_modal_action(ModalKeyAction::Commit).unwrap();
+    assert!(!app.modal.is_open, "Commit must close modal");
+    assert_eq!(app.queue.cursor, 1, "Playback must switch to track 1");
+
+    responder.join().unwrap();
+}
+
+#[test]
+fn test_app_modal_search_cancellation_with_esc() {
+    let (mut app, _server, _) = setup_test_app();
+    app.handle_action(KeyAction::OpenModal).unwrap();
+    assert_eq!(app.modal.viewer_cursor, 0);
+
+    // Move viewer cursor to 2
+    app.handle_modal_action(ModalKeyAction::CursorDown).unwrap();
+    app.handle_modal_action(ModalKeyAction::CursorDown).unwrap();
+    assert_eq!(app.modal.viewer_cursor, 2);
+
+    // Enter search mode
+    app.handle_modal_action(ModalKeyAction::SearchActivate).unwrap();
+    assert!(app.modal.search_active);
+
+    // Type "Zero"
+    for c in "Zero".chars() {
+        app.handle_modal_action(ModalKeyAction::SearchChar(c)).unwrap();
+    }
+    assert_eq!(app.modal.filtered_indices, vec![0]);
+
+    // Press Esc to abort search
+    app.handle_modal_action(ModalKeyAction::SearchAbort).unwrap();
+    assert!(!app.modal.search_active);
+    assert!(app.modal.is_open);
+    // Cursor restored to prior position 2
+    assert_eq!(app.modal.viewer_cursor, 2);
+    assert_eq!(app.queue.cursor, 0);
+}
+
+#[test]
+fn test_app_modal_search_in_shuffled_queue() {
+    let (mut app, _server, _) = setup_test_app();
+
+    // Toggle shuffle ON
+    app.handle_action(KeyAction::ToggleShuffle).unwrap();
+    assert!(app.queue.shuffle);
+
+    // Find the title of track at index 2 in shuffled playback order
+    let target_item_idx = 2;
+    let target_track_idx = app.queue.playback_order[target_item_idx];
+    let target_title = app.queue.tracks[target_track_idx].title.clone();
+
+    app.open_modal();
+    app.handle_modal_action(ModalKeyAction::SearchActivate).unwrap();
+
+    // Search for target title
+    for c in target_title.chars() {
+        app.handle_modal_action(ModalKeyAction::SearchChar(c)).unwrap();
+    }
+    assert!(app.modal.filtered_indices.contains(&target_item_idx));
+
+    // Resolve search
+    app.handle_modal_action(ModalKeyAction::SearchResolve).unwrap();
+    assert!(!app.modal.search_active);
+    assert_eq!(
+        app.modal.viewer_cursor, target_item_idx,
+        "Viewer cursor must center on the track in shuffled queue context"
+    );
+}
+
+
 

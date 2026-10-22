@@ -4,8 +4,8 @@ use crate::prefetch::AudioPrefetcher;
 use crate::queue::Queue;
 use crate::ui::{
     calculate_modal_rect, enter_alternate_screen, leave_alternate_screen, parse_key_event,
-    parse_modal_key_event, render_floating_modal, render_status_bar, setup_signal_handler,
-    KeyAction, ModalKeyAction, ModalState, StatusState, TerminalGuard,
+    parse_modal_key_event, parse_modal_search_key_event, render_floating_modal, render_status_bar,
+    setup_signal_handler, KeyAction, ModalKeyAction, ModalState, StatusState, TerminalGuard,
 };
 use std::io::{self, Write};
 use std::sync::atomic::Ordering;
@@ -130,17 +130,25 @@ impl App {
     /// Handles user actions inside the floating queue modal.
     /// Returns `Ok(false)` if the application should terminate.
     pub fn handle_modal_action(&mut self, action: ModalKeyAction) -> Result<bool, MpvError> {
+        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let rect = calculate_modal_rect(cols, rows);
+        let content_height = rect.content_height();
+
         match action {
             ModalKeyAction::CursorDown => {
-                let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-                let rect = calculate_modal_rect(cols, rows);
-                self.modal
-                    .move_cursor_down(self.queue.playback_order.len(), rect.content_height());
+                if self.modal.search_active {
+                    self.modal.move_search_down(content_height);
+                } else {
+                    self.modal
+                        .move_cursor_down(self.queue.playback_order.len(), content_height);
+                }
             }
             ModalKeyAction::CursorUp => {
-                let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-                let rect = calculate_modal_rect(cols, rows);
-                self.modal.move_cursor_up(rect.content_height());
+                if self.modal.search_active {
+                    self.modal.move_search_up(content_height);
+                } else {
+                    self.modal.move_cursor_up(content_height);
+                }
             }
             ModalKeyAction::Commit => {
                 let target_idx = self.modal.viewer_cursor;
@@ -155,6 +163,22 @@ impl App {
             ModalKeyAction::Quit => {
                 self.close_modal();
                 return Ok(false);
+            }
+            ModalKeyAction::SearchActivate => {
+                self.modal.start_search(&self.queue);
+            }
+            ModalKeyAction::SearchChar(c) => {
+                self.modal.append_search_char(c, &self.queue, content_height);
+            }
+            ModalKeyAction::SearchBackspace => {
+                self.modal.pop_search_char(&self.queue, content_height);
+            }
+            ModalKeyAction::SearchResolve => {
+                self.modal
+                    .resolve_search(self.queue.playback_order.len(), content_height);
+            }
+            ModalKeyAction::SearchAbort => {
+                self.modal.abort_search();
             }
         }
         Ok(true)
@@ -242,7 +266,12 @@ impl App {
             if crossterm::event::poll(tick_rate)? {
                 if let crossterm::event::Event::Key(key_event) = crossterm::event::read()? {
                     if self.modal.is_open {
-                        if let Some(modal_action) = parse_modal_key_event(key_event) {
+                        let modal_action = if self.modal.search_active {
+                            parse_modal_search_key_event(key_event)
+                        } else {
+                            parse_modal_key_event(key_event)
+                        };
+                        if let Some(modal_action) = modal_action {
                             match modal_action {
                                 ModalKeyAction::Close => {
                                     self.close_modal();
@@ -262,7 +291,7 @@ impl App {
                                     let _ = leave_alternate_screen(&mut stdout);
                                     break;
                                 }
-                                ModalKeyAction::CursorDown | ModalKeyAction::CursorUp => {
+                                _ => {
                                     let keep_running = self.handle_modal_action(modal_action)?;
                                     if !keep_running {
                                         break;

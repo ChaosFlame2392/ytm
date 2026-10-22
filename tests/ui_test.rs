@@ -2,8 +2,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifi
 use ytm::ui::{
     calculate_modal_rect, enter_alternate_screen, format_line1, format_line2, format_modal_lines,
     format_time, leave_alternate_screen, parse_key_event, parse_modal_key_event,
-    render_floating_modal, render_status_bar, render_status_lines, wipe_status_lines, KeyAction,
-    ModalKeyAction, ModalRect, ModalState, StatusState,
+    parse_modal_search_key_event, render_floating_modal, render_status_bar, render_status_lines,
+    wipe_status_lines, KeyAction, ModalKeyAction, ModalRect, ModalState, StatusState,
 };
 use ytm::{Queue, Track};
 
@@ -645,5 +645,244 @@ fn test_format_modal_lines_structure() {
     assert!(lines[3].starts_with('╰'));
     assert!(lines[3].ends_with('╯'));
 }
+
+#[test]
+fn test_modal_search_key_event_parsing() {
+    fn make_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::empty(),
+        }
+    }
+
+    // Entering search mode from normal modal mode: '/'
+    assert_eq!(
+        parse_modal_key_event(make_key(KeyCode::Char('/'), KeyModifiers::empty())),
+        Some(ModalKeyAction::SearchActivate)
+    );
+
+    // In search mode: typing characters
+    assert_eq!(
+        parse_modal_search_key_event(make_key(KeyCode::Char('a'), KeyModifiers::empty())),
+        Some(ModalKeyAction::SearchChar('a'))
+    );
+    assert_eq!(
+        parse_modal_search_key_event(make_key(KeyCode::Char('Z'), KeyModifiers::empty())),
+        Some(ModalKeyAction::SearchChar('Z'))
+    );
+    assert_eq!(
+        parse_modal_search_key_event(make_key(KeyCode::Char(' '), KeyModifiers::empty())),
+        Some(ModalKeyAction::SearchChar(' '))
+    );
+
+    // In search mode: Backspace
+    assert_eq!(
+        parse_modal_search_key_event(make_key(KeyCode::Backspace, KeyModifiers::empty())),
+        Some(ModalKeyAction::SearchBackspace)
+    );
+
+    // In search mode: navigation with Down / Up and j / k
+    assert_eq!(
+        parse_modal_search_key_event(make_key(KeyCode::Down, KeyModifiers::empty())),
+        Some(ModalKeyAction::CursorDown)
+    );
+    assert_eq!(
+        parse_modal_search_key_event(make_key(KeyCode::Up, KeyModifiers::empty())),
+        Some(ModalKeyAction::CursorUp)
+    );
+    assert_eq!(
+        parse_modal_search_key_event(make_key(KeyCode::Char('j'), KeyModifiers::empty())),
+        Some(ModalKeyAction::CursorDown)
+    );
+    assert_eq!(
+        parse_modal_search_key_event(make_key(KeyCode::Char('k'), KeyModifiers::empty())),
+        Some(ModalKeyAction::CursorUp)
+    );
+    assert_eq!(
+        parse_modal_search_key_event(make_key(KeyCode::Char('j'), KeyModifiers::CONTROL)),
+        Some(ModalKeyAction::CursorDown)
+    );
+    assert_eq!(
+        parse_modal_search_key_event(make_key(KeyCode::Char('k'), KeyModifiers::CONTROL)),
+        Some(ModalKeyAction::CursorUp)
+    );
+
+    // In search mode: Enter resolves search
+    assert_eq!(
+        parse_modal_search_key_event(make_key(KeyCode::Enter, KeyModifiers::empty())),
+        Some(ModalKeyAction::SearchResolve)
+    );
+
+    // In search mode: Esc aborts search
+    assert_eq!(
+        parse_modal_search_key_event(make_key(KeyCode::Esc, KeyModifiers::empty())),
+        Some(ModalKeyAction::SearchAbort)
+    );
+
+    // In search mode: Ctrl+C quits
+    assert_eq!(
+        parse_modal_search_key_event(make_key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        Some(ModalKeyAction::Quit)
+    );
+
+    // Release events ignored
+    let mut rel = make_key(KeyCode::Char('a'), KeyModifiers::empty());
+    rel.kind = KeyEventKind::Release;
+    assert_eq!(parse_modal_search_key_event(rel), None);
+}
+
+#[test]
+fn test_modal_state_search_filtering_and_navigation() {
+    let tracks = vec![
+        Track { index: 0, id: "t0".into(), title: "Bohemian Rhapsody".into() },
+        Track { index: 1, id: "t1".into(), title: "Starman".into() },
+        Track { index: 2, id: "t2".into(), title: "Radioactive".into() },
+        Track { index: 3, id: "t3".into(), title: "Radio Ga Ga".into() },
+        Track { index: 4, id: "t4".into(), title: "Heroes".into() },
+    ];
+    let queue = Queue::new(tracks);
+    let mut modal = ModalState::default();
+    let content_height = 10;
+    modal.open(1, queue.playback_order.len(), content_height);
+    assert_eq!(modal.viewer_cursor, 1);
+
+    // 1. Activate search mode
+    modal.start_search(&queue);
+    assert!(modal.search_active);
+    assert_eq!(modal.prior_viewer_cursor, 1);
+    assert_eq!(modal.search_query, "");
+    assert_eq!(modal.filtered_indices.len(), 5);
+    assert_eq!(modal.search_cursor, 0);
+
+    // 2. Type "radio" -> matches idx 2 ("Radioactive") and idx 3 ("Radio Ga Ga")
+    for c in "radio".chars() {
+        modal.append_search_char(c, &queue, content_height);
+    }
+    assert_eq!(modal.search_query, "radio");
+    assert_eq!(modal.filtered_indices, vec![2, 3]);
+    assert_eq!(modal.search_cursor, 0);
+
+    // 3. Navigate matches with Down / j and Up / k
+    modal.move_search_down(content_height);
+    assert_eq!(modal.search_cursor, 1); // points to idx 3
+    modal.move_search_down(content_height);
+    assert_eq!(modal.search_cursor, 1); // clamped at max match
+    modal.move_search_up(content_height);
+    assert_eq!(modal.search_cursor, 0); // points to idx 2
+    modal.move_search_up(content_height);
+    assert_eq!(modal.search_cursor, 0); // clamped at 0
+
+    // 4. Backspace removes characters and live-filters
+    modal.pop_search_char(&queue, content_height); // "radi"
+    assert_eq!(modal.search_query, "radi");
+    assert_eq!(modal.filtered_indices, vec![2, 3]);
+
+    for _ in 0..4 {
+        modal.pop_search_char(&queue, content_height);
+    }
+    assert_eq!(modal.search_query, "");
+    assert_eq!(modal.filtered_indices.len(), 5);
+
+    // 5. Query with no matches
+    for c in "zzzz".chars() {
+        modal.append_search_char(c, &queue, content_height);
+    }
+    assert_eq!(modal.search_query, "zzzz");
+    assert!(modal.filtered_indices.is_empty());
+    assert_eq!(modal.search_cursor, 0);
+}
+
+#[test]
+fn test_modal_state_search_resolution_and_cancellation() {
+    let tracks = vec![
+        Track { index: 0, id: "t0".into(), title: "Bohemian Rhapsody".into() },
+        Track { index: 1, id: "t1".into(), title: "Starman".into() },
+        Track { index: 2, id: "t2".into(), title: "Radioactive".into() },
+        Track { index: 3, id: "t3".into(), title: "Radio Ga Ga".into() },
+        Track { index: 4, id: "t4".into(), title: "Heroes".into() },
+    ];
+    let queue = Queue::new(tracks);
+    let mut modal = ModalState::default();
+    let content_height = 5;
+    modal.open(1, queue.playback_order.len(), content_height);
+    assert_eq!(modal.viewer_cursor, 1);
+
+    // Start search and resolve match
+    modal.start_search(&queue);
+    for c in "heroes".chars() {
+        modal.append_search_char(c, &queue, content_height);
+    }
+    assert_eq!(modal.filtered_indices, vec![4]);
+    assert_eq!(modal.search_cursor, 0);
+
+    // Resolve search with Enter
+    let resolved = modal.resolve_search(queue.playback_order.len(), content_height);
+    assert_eq!(resolved, Some(4));
+    assert!(!modal.search_active, "Search mode must exit on resolution");
+    assert_eq!(modal.search_query, "");
+    assert_eq!(modal.viewer_cursor, 4, "Viewer cursor must center on resolved track");
+
+    // Start search again and cancel with Esc
+    modal.start_search(&queue);
+    for c in "nonexistent".chars() {
+        modal.append_search_char(c, &queue, content_height);
+    }
+    assert!(modal.filtered_indices.is_empty());
+    // Abort with Esc
+    modal.abort_search();
+    assert!(!modal.search_active, "Search mode must exit on abort");
+    assert_eq!(modal.search_query, "");
+    assert_eq!(modal.viewer_cursor, 4, "Viewer cursor must restore prior position");
+}
+
+#[test]
+fn test_modal_search_rendering_prompt_and_no_matching_tracks() {
+    let tracks = vec![
+        Track { index: 0, id: "t0".into(), title: "Track Alpha".into() },
+        Track { index: 1, id: "t1".into(), title: "Track Beta".into() },
+    ];
+    let queue = Queue::new(tracks);
+    let rect = ModalRect {
+        x: 0,
+        y: 0,
+        width: 40,
+        height: 6, // content height = 4
+    };
+    let mut modal = ModalState::default();
+    modal.open(0, 2, rect.content_height());
+
+    // 1. Search with matching query
+    modal.start_search(&queue);
+    for c in "Beta".chars() {
+        modal.append_search_char(c, &queue, rect.content_height());
+    }
+
+    let mut buf = Vec::new();
+    render_floating_modal(&mut buf, &rect, &modal, &queue).unwrap();
+    let rendered = String::from_utf8(buf).unwrap();
+
+    // Verify search prompt line is visible
+    assert!(rendered.contains("Search: Beta"), "Must render inline search prompt");
+    // Verify matched track is listed
+    assert!(rendered.contains("Track Beta"), "Must render matching track title");
+    // Verify header badge displays match count
+    assert!(rendered.contains("[1/1]"), "Header must show filtered match position badge");
+
+    // 2. Search with query matching nothing -> shows [No matching tracks]
+    modal.append_search_char('x', &queue, rect.content_height());
+    let mut buf2 = Vec::new();
+    render_floating_modal(&mut buf2, &rect, &modal, &queue).unwrap();
+    let rendered2 = String::from_utf8(buf2).unwrap();
+
+    assert!(rendered2.contains("Search: Betax"));
+    assert!(
+        rendered2.contains("[No matching tracks]"),
+        "Must display '[No matching tracks]' indicator when no tracks match"
+    );
+    assert!(rendered2.contains("[0/0]"), "Position badge should show [0/0] on zero matches");
+}
+
 
 

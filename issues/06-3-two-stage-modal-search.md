@@ -4,13 +4,13 @@
 
 **Blocked by:** 06-2: NVIM-Style Floating Queue Modal & Direct Track Jump
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Pressing `/` within the floating modal enters search mode and displays the search prompt.
-- [ ] Character inputs append to the search query and trigger immediate live title filtering.
-- [ ] `Backspace` deletes characters from the query string and updates results.
-- [ ] `j` / `k` and `Down` / `Up` navigate through matching results.
-- [ ] If no matches exist, an indicator (e.g. `[No matching tracks]`) is displayed.
-- [ ] Pressing `Enter` on a match resolves the search, exits search mode, and centers the full queue view on that song in its actual active queue context.
-- [ ] Pressing `Esc` in search mode aborts the search, restoring the full queue and original cursor.
-- [ ] Integration tests in `tests/app_test.rs` verify search filtering, navigation, resolution, and cancellation.
+- [x] Pressing `/` within the floating modal enters search mode and displays the search prompt.
+- [x] Character inputs append to the search query and trigger immediate live title filtering.
+- [x] `Backspace` deletes characters from the query string and updates results.
+- [x] `j` / `k` and `Down` / `Up` navigate through matching results.
+- [x] If no matches exist, an indicator (e.g. `[No matching tracks]`) is displayed.
+- [x] Pressing `Enter` on a match resolves the search, exits search mode, and centers the full queue view on that song in its actual active queue context.
+- [x] Pressing `Esc` in search mode aborts the search, restoring the full queue and original cursor.
+- [x] Integration tests in `tests/app_test.rs` verify search filtering, navigation, resolution, and cancellation.
