@@ -4,10 +4,10 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Spawn `mpv` in headless mode (`--no-video --really-quiet --input-ipc-server=/tmp/ytm-mpv.sock`).
-- [ ] Connect UnixStream to the IPC socket and exchange JSON-RPC commands.
-- [ ] Implement `loadfile(path_or_url)`, `toggle_pause()`, `get_position()`, `get_duration()`.
-- [ ] Listen for `eof-reached` or playback end events to trigger track transition.
-- [ ] Gracefully terminate `mpv` on player exit.
+- [x] Spawn `mpv` in headless mode (`--no-video --really-quiet --input-ipc-server=/tmp/ytm-mpv.sock`).
+- [x] Connect UnixStream to the IPC socket and exchange JSON-RPC commands.
+- [x] Implement `loadfile(path_or_url)`, `toggle_pause()`, `get_position()`, `get_duration()`.
+- [x] Listen for `eof-reached` or playback end events to trigger track transition.
+- [x] Gracefully terminate `mpv` on player exit.
