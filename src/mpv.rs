@@ -263,7 +263,10 @@ impl MpvIpcClient {
         {
             path_or_url.to_string()
         } else {
-            format!("edl://{}", path_or_url)
+            // Use mpv length-prefixed EDL syntax (%length%path) to bypass macOS
+            // QuickLook thumbnail generation on local file paths without syntax ambiguity.
+            let byte_len = path_or_url.as_bytes().len();
+            format!("edl://%{}%{}", byte_len, path_or_url)
         };
         let resp = self.send_command(&["loadfile", &target, "replace"])?;
         match resp {
@@ -385,16 +388,6 @@ impl MpvController {
             .arg("--no-osd-bar")
             .arg("--sub-auto=no")
             .arg("--sub-font-provider=none")
-            .arg("--load-scripts=no")
-            .arg("--ytdl=no")
-            .arg("--load-console=no")
-            .arg("--load-auto-profiles=no")
-            .arg("--load-commands=no")
-            .arg("--load-context-menu=no")
-            .arg("--load-positioning=no")
-            .arg("--load-select=no")
-            .arg("--load-stats-overlay=no")
-            .arg("--cache=no")
             .arg("--demuxer-max-bytes=1024KiB")
             .arg("--demuxer-max-back-bytes=0")
             .arg("--demuxer-readahead-secs=5")
@@ -512,10 +505,10 @@ mod tests {
 
     #[test]
     fn test_format_command_and_parse_response() {
-        let cmd = format_command(1, &["loadfile", "test.opus", "replace"]);
+        let cmd = format_command(1, &["loadfile", "track.opus", "replace"]);
         assert_eq!(
             cmd.trim(),
-            r#"{"command":["loadfile","test.opus","replace"],"request_id":1}"#
+            r#"{"command":["loadfile","track.opus","replace"],"request_id":1}"#
         );
 
         let resp_success: MpvResponse = parse_response(r#"{"request_id":1,"error":"success","data":42.5}"#).unwrap();
@@ -593,7 +586,7 @@ mod tests {
             reader.read_line(&mut line).unwrap();
             let parsed: Value = serde_json::from_str(&line).unwrap();
             assert_eq!(parsed["command"][0], "loadfile");
-            assert_eq!(parsed["command"][1], "edl://song.opus");
+            assert_eq!(parsed["command"][1], "edl://%10%track.opus");
             let req_id = parsed["request_id"].as_u64().unwrap();
             server_stream
                 .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
@@ -640,7 +633,7 @@ mod tests {
             server_stream.write_all(b"\n").unwrap();
         });
 
-        client.loadfile("song.opus").unwrap();
+        client.loadfile("track.opus").unwrap();
 
         // Check event received
         let ev = client.recv_event_timeout(std::time::Duration::from_millis(500)).unwrap();
@@ -662,59 +655,34 @@ mod tests {
         let (client_stream, mut server_stream) = std::os::unix::net::UnixStream::pair().unwrap();
         let client = MpvIpcClient::new(client_stream);
 
+        let test_cases = [
+            ("/tmp/audio.opus", "edl://%15%/tmp/audio.opus"),
+            ("http://example.com/stream", "http://example.com/stream"),
+            ("https://example.com/stream", "https://example.com/stream"),
+            ("edl://existing", "edl://existing"),
+        ];
+
         let server_thread = std::thread::spawn(move || {
             use std::io::{BufRead, BufReader, Write};
             let mut reader = BufReader::new(server_stream.try_clone().unwrap());
 
-            // 1. Local path -> edl://
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            let parsed: Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(parsed["command"][1], "edl:///tmp/audio.opus");
-            let req_id = parsed["request_id"].as_u64().unwrap();
-            server_stream
-                .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
-                .unwrap();
-            server_stream.write_all(b"\n").unwrap();
-
-            // 2. http URL -> unchanged
-            line.clear();
-            reader.read_line(&mut line).unwrap();
-            let parsed: Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(parsed["command"][1], "http://example.com/stream");
-            let req_id = parsed["request_id"].as_u64().unwrap();
-            server_stream
-                .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
-                .unwrap();
-            server_stream.write_all(b"\n").unwrap();
-
-            // 3. https URL -> unchanged
-            line.clear();
-            reader.read_line(&mut line).unwrap();
-            let parsed: Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(parsed["command"][1], "https://example.com/stream");
-            let req_id = parsed["request_id"].as_u64().unwrap();
-            server_stream
-                .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
-                .unwrap();
-            server_stream.write_all(b"\n").unwrap();
-
-            // 4. edl:// URL -> unchanged
-            line.clear();
-            reader.read_line(&mut line).unwrap();
-            let parsed: Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(parsed["command"][1], "edl://existing");
-            let req_id = parsed["request_id"].as_u64().unwrap();
-            server_stream
-                .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
-                .unwrap();
-            server_stream.write_all(b"\n").unwrap();
+            for (_input, expected_target) in test_cases {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let parsed: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(parsed["command"][0], "loadfile");
+                assert_eq!(parsed["command"][1], expected_target);
+                let req_id = parsed["request_id"].as_u64().unwrap();
+                server_stream
+                    .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+                    .unwrap();
+                server_stream.write_all(b"\n").unwrap();
+            }
         });
 
-        client.loadfile("/tmp/audio.opus").unwrap();
-        client.loadfile("http://example.com/stream").unwrap();
-        client.loadfile("https://example.com/stream").unwrap();
-        client.loadfile("edl://existing").unwrap();
+        for (input, _expected) in test_cases {
+            client.loadfile(input).unwrap();
+        }
 
         server_thread.join().unwrap();
     }
