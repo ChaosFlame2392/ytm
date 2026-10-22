@@ -257,7 +257,15 @@ impl MpvIpcClient {
     }
 
     pub fn loadfile(&self, path_or_url: &str) -> Result<(), MpvError> {
-        let resp = self.send_command(&["loadfile", path_or_url, "replace"])?;
+        let target = if path_or_url.starts_with("http://")
+            || path_or_url.starts_with("https://")
+            || path_or_url.starts_with("edl://")
+        {
+            path_or_url.to_string()
+        } else {
+            format!("edl://{}", path_or_url)
+        };
+        let resp = self.send_command(&["loadfile", &target, "replace"])?;
         match resp {
             MpvResponse::Success { .. } => Ok(()),
             MpvResponse::Error { message, .. } => Err(MpvError::IpcError(message)),
@@ -366,20 +374,7 @@ impl MpvController {
         // Remove stale socket if it exists
         let _ = std::fs::remove_file(&path);
 
-        let binary = if let Ok(custom_path) = std::env::var("YTM_MPV_PATH") {
-            custom_path
-        } else if let Ok(home) = std::env::var("HOME") {
-            let headless = PathBuf::from(home).join(".local/bin/mpv-headless");
-            if headless.is_file() {
-                headless.to_string_lossy().into_owned()
-            } else {
-                "mpv".to_string()
-            }
-        } else {
-            "mpv".to_string()
-        };
-
-        let mut cmd = Command::new(binary);
+        let mut cmd = Command::new("mpv");
         cmd.arg("--no-config")
             .arg("--no-video")
             .arg("--vo=null")
@@ -390,9 +385,19 @@ impl MpvController {
             .arg("--no-osd-bar")
             .arg("--sub-auto=no")
             .arg("--sub-font-provider=none")
-            .arg("--demuxer-max-bytes=8M")
-            .arg("--demuxer-max-back-bytes=2M")
-            .arg("--demuxer-readahead-secs=20")
+            .arg("--load-scripts=no")
+            .arg("--ytdl=no")
+            .arg("--load-console=no")
+            .arg("--load-auto-profiles=no")
+            .arg("--load-commands=no")
+            .arg("--load-context-menu=no")
+            .arg("--load-positioning=no")
+            .arg("--load-select=no")
+            .arg("--load-stats-overlay=no")
+            .arg("--cache=no")
+            .arg("--demuxer-max-bytes=1024KiB")
+            .arg("--demuxer-max-back-bytes=0")
+            .arg("--demuxer-readahead-secs=5")
             .arg("--audio-reversal-buffer=0")
             .arg("--video-reversal-buffer=0")
             .arg("--stream-buffer-size=32k")
@@ -588,7 +593,7 @@ mod tests {
             reader.read_line(&mut line).unwrap();
             let parsed: Value = serde_json::from_str(&line).unwrap();
             assert_eq!(parsed["command"][0], "loadfile");
-            assert_eq!(parsed["command"][1], "song.opus");
+            assert_eq!(parsed["command"][1], "edl://song.opus");
             let req_id = parsed["request_id"].as_u64().unwrap();
             server_stream
                 .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
@@ -648,6 +653,68 @@ mod tests {
         assert_eq!(dur, None);
 
         client.toggle_pause().unwrap();
+
+        server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn test_loadfile_targets_preserve_urls_and_wrap_local_files() {
+        let (client_stream, mut server_stream) = std::os::unix::net::UnixStream::pair().unwrap();
+        let client = MpvIpcClient::new(client_stream);
+
+        let server_thread = std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            let mut reader = BufReader::new(server_stream.try_clone().unwrap());
+
+            // 1. Local path -> edl://
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let parsed: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(parsed["command"][1], "edl:///tmp/audio.opus");
+            let req_id = parsed["request_id"].as_u64().unwrap();
+            server_stream
+                .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+                .unwrap();
+            server_stream.write_all(b"\n").unwrap();
+
+            // 2. http URL -> unchanged
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            let parsed: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(parsed["command"][1], "http://example.com/stream");
+            let req_id = parsed["request_id"].as_u64().unwrap();
+            server_stream
+                .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+                .unwrap();
+            server_stream.write_all(b"\n").unwrap();
+
+            // 3. https URL -> unchanged
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            let parsed: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(parsed["command"][1], "https://example.com/stream");
+            let req_id = parsed["request_id"].as_u64().unwrap();
+            server_stream
+                .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+                .unwrap();
+            server_stream.write_all(b"\n").unwrap();
+
+            // 4. edl:// URL -> unchanged
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            let parsed: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(parsed["command"][1], "edl://existing");
+            let req_id = parsed["request_id"].as_u64().unwrap();
+            server_stream
+                .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+                .unwrap();
+            server_stream.write_all(b"\n").unwrap();
+        });
+
+        client.loadfile("/tmp/audio.opus").unwrap();
+        client.loadfile("http://example.com/stream").unwrap();
+        client.loadfile("https://example.com/stream").unwrap();
+        client.loadfile("edl://existing").unwrap();
 
         server_thread.join().unwrap();
     }
