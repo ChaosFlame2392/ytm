@@ -4,10 +4,11 @@
 
 **Blocked by:** 03: Queue State Machine with Dynamic Shuffle & Iceberg Reset
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Store audio in standard macOS cache: `~/Library/Caches/ytm/audio/`.
-- [ ] On track change, inspect `queue[current + 1]` and spawn background download worker if not cached.
-- [ ] Prefer local `.opus` file if present, falling back to YouTube streaming URL.
-- [ ] Implement LRU cache eviction: check directory size, delete oldest accessed `.opus` files if exceeding 500MB until below 400MB.
-- [ ] Unit tests for LRU size calculation and pruning order.
+- [x] Store audio in standard macOS cache: `~/Library/Caches/ytm/audio/`.
+- [x] On track change, inspect `queue[current + 1]` and spawn background download worker if not cached.
+- [x] Prefer local `.opus` file if present, falling back to YouTube streaming URL.
+- [x] Implement LRU cache eviction: check directory size, delete oldest accessed `.opus` files if exceeding 500MB until below 400MB.
+- [x] Unit tests for LRU size calculation and pruning order.
+
