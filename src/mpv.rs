@@ -367,7 +367,7 @@ impl MpvController {
             .arg("--really-quiet")
             .arg("--idle")
             .arg(format!("--input-ipc-server={}", path.display()));
-        if cfg!(test) || std::env::var("YTM_AO_NULL").is_ok() {
+        if cfg!(test) {
             cmd.arg("--ao=null");
         }
         let mut child = cmd

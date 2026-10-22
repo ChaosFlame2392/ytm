@@ -1,11 +1,11 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use ytm::ui::{
     calculate_modal_rect, enter_alternate_screen, format_line1, format_line2, format_modal_lines,
-    format_time, leave_alternate_screen, parse_key_event, parse_modal_key_event,
+    format_modal_row, format_time, leave_alternate_screen, parse_key_event, parse_modal_key_event,
     parse_modal_search_key_event, render_floating_modal, render_status_bar, render_status_lines,
     wipe_status_lines, KeyAction, ModalKeyAction, ModalRect, ModalState, StatusState,
 };
-use ytm::{Queue, Track};
+use ytm::{AudioCache, Queue, Track};
 
 #[test]
 fn test_format_time_variants() {
@@ -180,18 +180,20 @@ fn test_parse_key_event_bindings() {
         Some(KeyAction::SeekBackward)
     );
 
-    // Seek forward: l, L, Right
+    // Seek forward: l, Right
     assert_eq!(
         parse_key_event(make_key_event(KeyCode::Char('l'), KeyModifiers::empty())),
         Some(KeyAction::SeekForward)
     );
     assert_eq!(
-        parse_key_event(make_key_event(KeyCode::Char('L'), KeyModifiers::empty())),
-        Some(KeyAction::SeekForward)
-    );
-    assert_eq!(
         parse_key_event(make_key_event(KeyCode::Right, KeyModifiers::empty())),
         Some(KeyAction::SeekForward)
+    );
+
+    // Single-track loop: L
+    assert_eq!(
+        parse_key_event(make_key_event(KeyCode::Char('L'), KeyModifiers::empty())),
+        Some(KeyAction::ToggleLoop)
     );
 
     // Shuffle: s, S
@@ -572,7 +574,7 @@ fn test_modal_rendering_with_selection_indicators() {
     modal.toggle_selection(0);
     modal.toggle_selection(2);
 
-    let lines = format_modal_lines(&rect, &modal, &queue);
+    let lines = format_modal_lines(&rect, &modal, &queue, None);
     // Line 1: Track 0 is active (▶) AND selected ([x])
     assert!(lines[1].contains("[x]"), "Track 0 should show [x]");
     assert!(lines[1].contains("Track Zero"));
@@ -588,7 +590,7 @@ fn test_modal_rendering_with_selection_indicators() {
 
     // Clear selections and re-render
     modal.clear_selection();
-    let lines_cleared = format_modal_lines(&rect, &modal, &queue);
+    let lines_cleared = format_modal_lines(&rect, &modal, &queue, None);
     assert!(lines_cleared[1].contains("[ ]"), "Track 0 should show [ ] after clear");
     assert!(lines_cleared[2].contains("[ ]"), "Track 1 should show [ ] after clear");
     assert!(lines_cleared[3].contains("[ ]"), "Track 2 should show [ ] after clear");
@@ -619,7 +621,7 @@ fn test_modal_border_and_content_rendering_in_memory() {
     modal.open(0, 5, rect.content_height());
 
     let mut buf = Vec::new();
-    render_floating_modal(&mut buf, &rect, &modal, &queue).unwrap();
+    render_floating_modal(&mut buf, &rect, &modal, &queue, None).unwrap();
     let rendered = String::from_utf8(buf).unwrap();
 
     // Verify rounded borders
@@ -662,7 +664,7 @@ fn test_modal_border_and_content_rendering_in_memory() {
     assert_eq!(modal.viewer_cursor, 2);
 
     let mut buf2 = Vec::new();
-    render_floating_modal(&mut buf2, &rect, &modal, &queue).unwrap();
+    render_floating_modal(&mut buf2, &rect, &modal, &queue, None).unwrap();
     let rendered2 = String::from_utf8(buf2).unwrap();
 
     assert!(
@@ -688,7 +690,7 @@ fn test_modal_empty_queue_rendering() {
     modal.open(0, 0, rect.content_height());
 
     let mut buf = Vec::new();
-    render_floating_modal(&mut buf, &rect, &modal, &queue).unwrap();
+    render_floating_modal(&mut buf, &rect, &modal, &queue, None).unwrap();
     let rendered = String::from_utf8(buf).unwrap();
 
     assert!(rendered.contains("[0/0]"), "Position badge should show [0/0]");
@@ -741,7 +743,7 @@ fn test_format_modal_lines_structure() {
     let mut modal = ModalState::default();
     modal.open(0, 2, rect.content_height());
 
-    let lines = format_modal_lines(&rect, &modal, &queue);
+    let lines = format_modal_lines(&rect, &modal, &queue, None);
     assert_eq!(lines.len(), 4);
     assert!(lines[0].starts_with('╭'));
     assert!(lines[0].ends_with('╮'));
@@ -799,14 +801,17 @@ fn test_modal_search_key_event_parsing() {
         parse_modal_search_key_event(make_key(KeyCode::Up, KeyModifiers::empty())),
         Some(ModalKeyAction::CursorUp)
     );
+    // In search mode: typing 'j' and 'k' must produce SearchChar, NOT cursor navigation
     assert_eq!(
         parse_modal_search_key_event(make_key(KeyCode::Char('j'), KeyModifiers::empty())),
-        Some(ModalKeyAction::CursorDown)
+        Some(ModalKeyAction::SearchChar('j'))
     );
     assert_eq!(
         parse_modal_search_key_event(make_key(KeyCode::Char('k'), KeyModifiers::empty())),
-        Some(ModalKeyAction::CursorUp)
+        Some(ModalKeyAction::SearchChar('k'))
     );
+
+    // In search mode: Ctrl+j / Ctrl+k perform cursor navigation
     assert_eq!(
         parse_modal_search_key_event(make_key(KeyCode::Char('j'), KeyModifiers::CONTROL)),
         Some(ModalKeyAction::CursorDown)
@@ -967,7 +972,7 @@ fn test_modal_search_rendering_prompt_and_no_matching_tracks() {
     }
 
     let mut buf = Vec::new();
-    render_floating_modal(&mut buf, &rect, &modal, &queue).unwrap();
+    render_floating_modal(&mut buf, &rect, &modal, &queue, None).unwrap();
     let rendered = String::from_utf8(buf).unwrap();
 
     // Verify search prompt line is visible
@@ -980,7 +985,7 @@ fn test_modal_search_rendering_prompt_and_no_matching_tracks() {
     // 2. Search with query matching nothing -> shows [No matching tracks]
     modal.append_search_char('x', &queue, rect.content_height());
     let mut buf2 = Vec::new();
-    render_floating_modal(&mut buf2, &rect, &modal, &queue).unwrap();
+    render_floating_modal(&mut buf2, &rect, &modal, &queue, None).unwrap();
     let rendered2 = String::from_utf8(buf2).unwrap();
 
     assert!(rendered2.contains("Search: Betax"));
@@ -989,6 +994,118 @@ fn test_modal_search_rendering_prompt_and_no_matching_tracks() {
         "Must display '[No matching tracks]' indicator when no tracks match"
     );
     assert!(rendered2.contains("[0/0]"), "Position badge should show [0/0] on zero matches");
+}
+
+#[test]
+fn test_modal_search_typing_j_and_k_appends_to_query() {
+    let tracks = vec![
+        Track { index: 0, id: "t0".into(), title: "Jazz Fusion".into() },
+        Track { index: 1, id: "t1".into(), title: "Kendrick Lamar - Alright".into() },
+        Track { index: 2, id: "t2".into(), title: "Rock Anthem".into() },
+    ];
+    let queue = Queue::new(tracks);
+    let mut modal = ModalState::default();
+    let content_height = 8;
+    modal.open(0, 3, content_height);
+
+    modal.start_search(&queue);
+    assert_eq!(modal.search_query, "");
+
+    // 1. Type 'j' - must append to query, not navigate cursor
+    modal.append_search_char('j', &queue, content_height);
+    assert_eq!(modal.search_query, "j");
+    assert_eq!(modal.filtered_indices, vec![0]); // only "Jazz Fusion" contains 'j'
+
+    // Pop and type 'k' - must append to query
+    modal.pop_search_char(&queue, content_height);
+    assert_eq!(modal.search_query, "");
+    modal.append_search_char('k', &queue, content_height);
+    assert_eq!(modal.search_query, "k");
+    assert_eq!(modal.filtered_indices, vec![1, 2]); // "Kendrick Lamar" and "Rock Anthem" contain 'k'
+
+    // Type "endrick" to complete "kendrick"
+    for c in "endrick".chars() {
+        modal.append_search_char(c, &queue, content_height);
+    }
+    assert_eq!(modal.search_query, "kendrick");
+    assert_eq!(modal.filtered_indices, vec![1]);
+}
+
+#[test]
+fn test_modal_cache_indicator_rendering() {
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let test_dir = std::env::temp_dir().join(format!("ytm-ui-cache-indicator-test-{}-{}", std::process::id(), count));
+    let _ = std::fs::create_dir_all(&test_dir);
+    let cache = AudioCache::new(test_dir.clone());
+
+    // Mark track 0 as cached by creating its .opus file
+    let cached_path = cache.cache_file_path("c0");
+    std::fs::write(&cached_path, b"dummy audio").unwrap();
+    assert!(cache.is_cached("c0"));
+    assert!(!cache.is_cached("c1"));
+
+    let tracks = vec![
+        Track { index: 0, id: "c0".into(), title: "Cached Track".into() },
+        Track { index: 1, id: "c1".into(), title: "Streaming Track".into() },
+    ];
+    let queue = Queue::new(tracks);
+    let rect = ModalRect {
+        x: 0,
+        y: 0,
+        width: 50,
+        height: 4,
+    };
+    let mut modal = ModalState::default();
+    modal.open(0, 2, rect.content_height());
+
+    // 1. Browsing mode: verify [⚡] displayed on cached track
+    let lines = format_modal_lines(&rect, &modal, &queue, Some(&cache));
+    assert_eq!(lines.len(), 4);
+    assert!(lines[1].contains("[⚡]"), "Line 1 (cached track) must display [⚡]");
+    assert!(lines[1].contains("Cached Track"));
+    assert!(!lines[2].contains("[⚡]"), "Line 2 (uncached track) must NOT display [⚡]");
+    assert!(lines[2].contains("Streaming Track"));
+
+    // 2. Search mode: verify [⚡] displayed on cached track
+    modal.start_search(&queue);
+    let search_lines = format_modal_lines(&rect, &modal, &queue, Some(&cache));
+    // Line 0 is top border, line 1 is search input prompt, line 2 is first match (cached), line 3 is bottom border
+    assert!(search_lines[2].contains("[⚡]"), "Search match for cached track must display [⚡]");
+    assert!(search_lines[2].contains("Cached Track"));
+
+    // Filter to streaming track only
+    modal.append_search_char('S', &queue, rect.content_height());
+    let stream_search_lines = format_modal_lines(&rect, &modal, &queue, Some(&cache));
+    assert!(!stream_search_lines[2].contains("[⚡]"), "Search match for uncached track must NOT display [⚡]");
+    assert!(stream_search_lines[2].contains("Streaming Track"));
+
+    let _ = std::fs::remove_dir_all(&test_dir);
+}
+
+#[test]
+fn test_format_modal_row_helper() {
+    // 1. Cursor inactive, unselected, uncached
+    let row1 = format_modal_row(0, "Simple Track", false, false, false, false, 30);
+    assert_eq!(row1.chars().count(), 32); // 30 content + 2 border chars '│'
+    assert!(row1.starts_with("│   [ ]   1. Simple Track"));
+    assert!(row1.ends_with('│'));
+    assert!(!row1.contains("\x1b[7m"));
+    assert!(!row1.contains("[⚡]"));
+
+    // 2. Cursor active (highlighted), selected, cached
+    let row2 = format_modal_row(1, "Highlighted Cached", true, true, true, true, 35);
+    assert!(row2.contains("\x1b[7m"), "Must include ANSI reverse video for cursor highlight");
+    assert!(row2.contains('▶'), "Must include active playback marker");
+    assert!(row2.contains("[x]"), "Must include selection marker");
+    assert!(row2.contains("[⚡]"), "Must include cache badge");
+    assert!(row2.contains("Highlighted Cached"));
+
+    // 3. Truncation when title exceeds content_width
+    let long_title = "This is a remarkably long track title that will definitely exceed the boundary";
+    let row3 = format_modal_row(2, long_title, false, false, false, false, 25);
+    assert!(row3.contains('…'), "Must truncate with ellipsis");
+    assert_eq!(row3.chars().count(), 27); // 25 content + 2 border chars
 }
 
 

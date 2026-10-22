@@ -202,7 +202,8 @@ pub fn parse_key_event(event: KeyEvent) -> Option<KeyAction> {
         KeyCode::Char('>') | KeyCode::Char('.') => Some(KeyAction::NextTrack),
         KeyCode::Char('<') | KeyCode::Char(',') => Some(KeyAction::PreviousTrack),
         KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Left => Some(KeyAction::SeekBackward),
-        KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Right => Some(KeyAction::SeekForward),
+        KeyCode::Char('L') => Some(KeyAction::ToggleLoop),
+        KeyCode::Char('l') | KeyCode::Right => Some(KeyAction::SeekForward),
         KeyCode::Char('s') | KeyCode::Char('S') => Some(KeyAction::ToggleShuffle),
         KeyCode::Char('r') | KeyCode::Char('R') => Some(KeyAction::ResetToTop),
         KeyCode::Char('q') | KeyCode::Char('Q') => Some(KeyAction::Quit),
@@ -253,8 +254,8 @@ pub fn parse_modal_search_key_event(event: KeyEvent) -> Option<ModalKeyAction> {
     }
 
     match event.code {
-        KeyCode::Down | KeyCode::Char('j') => Some(ModalKeyAction::CursorDown),
-        KeyCode::Up | KeyCode::Char('k') => Some(ModalKeyAction::CursorUp),
+        KeyCode::Down => Some(ModalKeyAction::CursorDown),
+        KeyCode::Up => Some(ModalKeyAction::CursorUp),
         KeyCode::Enter => Some(ModalKeyAction::SearchResolve),
         KeyCode::Esc => Some(ModalKeyAction::SearchAbort),
         KeyCode::Backspace => Some(ModalKeyAction::SearchBackspace),
@@ -442,7 +443,7 @@ impl ModalState {
         self.search_query.clear();
         self.prior_viewer_cursor = self.viewer_cursor;
         self.prior_viewport_offset = self.viewport_offset;
-        self.filtered_indices = (0..queue.playback_order.len()).collect();
+        self.filtered_indices = queue.search_indices("");
         self.search_cursor = 0;
         self.search_viewport_offset = 0;
     }
@@ -461,20 +462,7 @@ impl ModalState {
 
     /// Recomputes `filtered_indices` from `search_query` and adjusts `search_cursor` & viewport.
     pub fn recompute_search_filter(&mut self, queue: &crate::queue::Queue, content_height: usize) {
-        let q = self.search_query.to_lowercase();
-        self.filtered_indices = queue
-            .playback_order
-            .iter()
-            .enumerate()
-            .filter_map(|(item_idx, &track_idx)| {
-                let track = &queue.tracks[track_idx];
-                if q.is_empty() || track.title.to_lowercase().contains(&q) {
-                    Some(item_idx)
-                } else {
-                    None
-                }
-            })
-            .collect();
+        self.filtered_indices = queue.search_indices(&self.search_query);
 
         if self.filtered_indices.is_empty() {
             self.search_cursor = 0;
@@ -524,7 +512,7 @@ impl ModalState {
         }
     }
 
-    /// Resolves search on the highlighted match: exits search mode, centers viewer cursor on that song in full queue.
+    /// Resolves search on the highlighted match: exits search mode, centers viewer cursor on that track in full queue.
     pub fn resolve_search(&mut self, total_items: usize, content_height: usize) -> Option<usize> {
         if self.filtered_indices.is_empty() {
             return None;
@@ -590,12 +578,48 @@ impl ModalState {
     }
 }
 
+/// Formats a single content row in the floating queue modal.
+/// Deduplicates active marker, selection badge, track number, cache indicator (`[⚡]`),
+/// title truncation, right padding to `content_width`, and optional ANSI reverse video highlight.
+pub fn format_modal_row(
+    index: usize,
+    title: &str,
+    is_active: bool,
+    is_selected: bool,
+    is_cached: bool,
+    is_cursor: bool,
+    content_width: usize,
+) -> String {
+    let active_marker = if is_active { "▶ " } else { "  " };
+    let select_marker = if is_selected { "[x] " } else { "[ ] " };
+    let num_str = format!("{:>3}. ", index + 1);
+    let cache_badge = if is_cached { "[⚡] " } else { "" };
+    let prefix = format!(" {}{}{}{}", active_marker, select_marker, num_str, cache_badge);
+    let prefix_len = prefix.chars().count();
+
+    let avail_title_len = content_width.saturating_sub(prefix_len + 1);
+    let title = truncate_to_width(title, avail_title_len);
+
+    let mut row_content = format!("{}{}", prefix, title);
+    let content_chars = row_content.chars().count();
+    if content_chars < content_width {
+        row_content.push_str(&" ".repeat(content_width - content_chars));
+    }
+
+    if is_cursor {
+        format!("│\x1b[7m{}\x1b[0m│", row_content)
+    } else {
+        format!("│{}│", row_content)
+    }
+}
+
 /// Formats the complete floating modal lines including rounded unicode borders,
 /// header with position badge, track list rows, and footer key hints.
 pub fn format_modal_lines(
     rect: &ModalRect,
     modal: &ModalState,
     queue: &crate::queue::Queue,
+    cache: Option<&crate::cache::AudioCache>,
 ) -> Vec<String> {
     let width = rect.width as usize;
     let content_height = rect.content_height();
@@ -667,27 +691,19 @@ pub fn format_modal_lines(
                     let track_idx = queue.playback_order[queue_idx];
                     let track = &queue.tracks[track_idx];
                     let is_active = queue_idx == queue.cursor;
+                    let is_selected = modal.is_selected(queue_idx);
+                    let is_cached = cache.is_some_and(|c| c.is_cached(&track.id));
                     let is_cursor = match_index == modal.search_cursor;
 
-                    let active_marker = if is_active { "▶ " } else { "  " };
-                    let num_str = format!("{:>3}. ", queue_idx + 1);
-                    let prefix = format!(" {}{}", active_marker, num_str);
-                    let prefix_len = prefix.chars().count();
-
-                    let avail_title_len = content_width.saturating_sub(prefix_len + 1);
-                    let title = truncate_to_width(&track.title, avail_title_len);
-
-                    let mut row_content = format!("{}{}", prefix, title);
-                    let content_chars = row_content.chars().count();
-                    if content_chars < content_width {
-                        row_content.push_str(&" ".repeat(content_width - content_chars));
-                    }
-
-                    if is_cursor {
-                        lines.push(format!("│\x1b[7m{}\x1b[0m│", row_content));
-                    } else {
-                        lines.push(format!("│{}│", row_content));
-                    }
+                    lines.push(format_modal_row(
+                        queue_idx,
+                        &track.title,
+                        is_active,
+                        is_selected,
+                        is_cached,
+                        is_cursor,
+                        content_width,
+                    ));
                 } else {
                     lines.push(format!("│{}│", " ".repeat(content_width)));
                 }
@@ -711,29 +727,19 @@ pub fn format_modal_lines(
                 let track_idx = queue.playback_order[item_index];
                 let track = &queue.tracks[track_idx];
                 let is_active = item_index == queue.cursor;
+                let is_selected = modal.is_selected(item_index);
+                let is_cached = cache.is_some_and(|c| c.is_cached(&track.id));
                 let is_cursor = item_index == modal.viewer_cursor;
 
-                let active_marker = if is_active { "▶ " } else { "  " };
-                let select_marker = if modal.is_selected(item_index) { "[x] " } else { "[ ] " };
-                let num_str = format!("{:>3}. ", item_index + 1);
-                let prefix = format!(" {}{}{}", active_marker, select_marker, num_str);
-                let prefix_len = prefix.chars().count();
-
-                let avail_title_len = content_width.saturating_sub(prefix_len + 1);
-                let title = truncate_to_width(&track.title, avail_title_len);
-
-
-                let mut row_content = format!("{}{}", prefix, title);
-                let content_chars = row_content.chars().count();
-                if content_chars < content_width {
-                    row_content.push_str(&" ".repeat(content_width - content_chars));
-                }
-
-                if is_cursor {
-                    lines.push(format!("│\x1b[7m{}\x1b[0m│", row_content));
-                } else {
-                    lines.push(format!("│{}│", row_content));
-                }
+                lines.push(format_modal_row(
+                    item_index,
+                    &track.title,
+                    is_active,
+                    is_selected,
+                    is_cached,
+                    is_cursor,
+                    content_width,
+                ));
             } else {
                 lines.push(format!("│{}│", " ".repeat(content_width)));
             }
@@ -743,7 +749,7 @@ pub fn format_modal_lines(
     // 3. Bottom border with Footer hints
     let (footer_text, short_footer) = if modal.search_active {
         (
-            " Enter: Resolve │ j/k: Scroll │ Esc: Cancel ",
+            " Enter: Resolve │ Up/Down: Scroll │ Esc: Cancel ",
             " Enter: Resolve │ Esc: Cancel ",
         )
     } else {
@@ -791,8 +797,9 @@ pub fn render_floating_modal<W: Write>(
     rect: &ModalRect,
     modal: &ModalState,
     queue: &crate::queue::Queue,
+    cache: Option<&crate::cache::AudioCache>,
 ) -> io::Result<()> {
-    let lines = format_modal_lines(rect, modal, queue);
+    let lines = format_modal_lines(rect, modal, queue, cache);
     for (i, line) in lines.iter().enumerate() {
         execute!(
             writer,

@@ -283,3 +283,35 @@ fn test_queue_reorder_with_selection_edge_cases() {
     assert_eq!(single.playback_order, vec![0]);
 }
 
+#[test]
+fn test_queue_search_indices() {
+    let tracks = vec![
+        Track { index: 0, id: "0".into(), title: "Bohemian Rhapsody".into() },
+        Track { index: 1, id: "1".into(), title: "Starman".into() },
+        Track { index: 2, id: "2".into(), title: "Radioactive".into() },
+        Track { index: 3, id: "3".into(), title: "Radio Ga Ga".into() },
+    ];
+    let mut queue = Queue::new(tracks);
+
+    // 1. Empty query returns all item indices in playback_order
+    assert_eq!(queue.search_indices(""), vec![0, 1, 2, 3]);
+
+    // 2. Case-insensitive substring search
+    assert_eq!(queue.search_indices("RADIO"), vec![2, 3]);
+    assert_eq!(queue.search_indices("rhapsody"), vec![0]);
+    assert_eq!(queue.search_indices("man"), vec![1]);
+
+    // 3. No match
+    assert_eq!(queue.search_indices("Nonexistent"), Vec::<usize>::new());
+
+    // 4. In reordered playback_order, search_indices returns indices into playback_order
+    queue.playback_order = vec![3, 1, 0, 2];
+    // "Radio" matches playback_order[0] (track 3) and playback_order[3] (track 2)
+    assert_eq!(queue.search_indices("Radio"), vec![0, 3]);
+
+    // 5. Empty queue returns empty
+    let empty_queue = Queue::default();
+    assert_eq!(empty_queue.search_indices("test"), Vec::<usize>::new());
+    assert_eq!(empty_queue.search_indices(""), Vec::<usize>::new());
+}
+

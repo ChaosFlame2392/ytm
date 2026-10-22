@@ -137,6 +137,24 @@ impl Queue {
         self.current_track()
     }
 
+    /// Returns the indices in `playback_order` whose track title matches `query` case-insensitively.
+    /// If `query` is empty, returns all indices in `0..playback_order.len()`.
+    pub fn search_indices(&self, query: &str) -> Vec<usize> {
+        let q = query.to_lowercase();
+        self.playback_order
+            .iter()
+            .enumerate()
+            .filter_map(|(item_idx, &track_idx)| {
+                let track = self.tracks.get(track_idx)?;
+                if q.is_empty() || track.title.to_lowercase().contains(&q) {
+                    Some(item_idx)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
 
     pub fn toggle_loop(&mut self) -> bool {
         self.single_loop = !self.single_loop;

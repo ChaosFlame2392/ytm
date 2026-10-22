@@ -206,7 +206,7 @@ impl App {
     pub fn render_modal<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let rect = calculate_modal_rect(cols, rows);
-        render_floating_modal(writer, &rect, &self.modal, &self.queue)
+        render_floating_modal(writer, &rect, &self.modal, &self.queue, Some(&self.cache))
     }
 
     /// Processes MPV IPC events, advancing track automatically on EOF.

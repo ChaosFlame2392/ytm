@@ -6,7 +6,8 @@ use ytm::mpv::{EndFileReason, MpvController, MpvEvent};
 use ytm::playlist::Track;
 use ytm::prefetch::{AudioDownloader, AudioPrefetcher};
 use ytm::queue::Queue;
-use ytm::ui::{KeyAction, ModalKeyAction};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+use ytm::ui::{parse_key_event, parse_modal_search_key_event, KeyAction, ModalKeyAction};
 
 struct MockDownloader {
     downloaded: Arc<Mutex<Vec<String>>>,
@@ -1089,6 +1090,105 @@ fn test_app_modal_commit_empty_selection_preserves_single_jump() {
     assert_eq!(app.queue.current_track().unwrap().id, "vid_1");
 
     responder.join().unwrap();
+}
+
+#[test]
+fn test_app_modal_search_typing_j_and_k_appends_to_query() {
+    let (mut app, _server, _) = setup_test_app();
+    app.open_modal();
+
+    // Activate search
+    app.handle_modal_action(ModalKeyAction::SearchActivate).unwrap();
+    assert!(app.modal.search_active);
+
+    fn make_key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::empty(),
+            kind: KeyEventKind::Press,
+            state: KeyEventState::empty(),
+        }
+    }
+
+    // Bare 'j' must parse to SearchChar and append to query
+    let act_j = parse_modal_search_key_event(make_key(KeyCode::Char('j'))).unwrap();
+    assert_eq!(act_j, ModalKeyAction::SearchChar('j'));
+    app.handle_modal_action(act_j).unwrap();
+    assert_eq!(app.modal.search_query, "j");
+
+    // Bare 'k' must parse to SearchChar and append to query
+    let act_k = parse_modal_search_key_event(make_key(KeyCode::Char('k'))).unwrap();
+    assert_eq!(act_k, ModalKeyAction::SearchChar('k'));
+    app.handle_modal_action(act_k).unwrap();
+    assert_eq!(app.modal.search_query, "jk");
+}
+
+#[test]
+fn test_app_keybinding_toggle_loop_via_capital_l_and_seek_via_lowercase_l() {
+    let (mut app, mut server, _) = setup_test_app();
+
+    fn make_key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::empty(),
+            kind: KeyEventKind::Press,
+            state: KeyEventState::empty(),
+        }
+    }
+
+    // 'L' must parse to ToggleLoop
+    let act_loop = parse_key_event(make_key(KeyCode::Char('L'))).unwrap();
+    assert_eq!(act_loop, KeyAction::ToggleLoop);
+    assert!(!app.queue.single_loop);
+    app.handle_action(act_loop).unwrap();
+    assert!(app.queue.single_loop);
+    app.handle_action(act_loop).unwrap();
+    assert!(!app.queue.single_loop);
+
+    // 'l' must parse to SeekForward
+    let act_seek = parse_key_event(make_key(KeyCode::Char('l'))).unwrap();
+    assert_eq!(act_seek, KeyAction::SeekForward);
+
+    // Handle SeekForward triggers seek IPC
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(&server);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "seek");
+        assert_eq!(val["command"][1], "5");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    app.handle_action(act_seek).unwrap();
+    responder.join().unwrap();
+}
+
+#[test]
+fn test_app_modal_cache_indicator_rendering() {
+    let (mut app, _server, _) = setup_test_app();
+
+    // Cache vid_0
+    let cached_file = app.cache.cache_file_path("vid_0");
+    std::fs::write(&cached_file, b"test audio content").unwrap();
+    assert!(app.cache.is_cached("vid_0"));
+    assert!(!app.cache.is_cached("vid_1"));
+
+    app.open_modal();
+
+    let mut buf = Vec::new();
+    app.render_modal(&mut buf).unwrap();
+    let rendered = String::from_utf8(buf).unwrap();
+
+    // Line with vid_0 (Track Zero) must have [⚡]
+    assert!(rendered.contains("[⚡]"), "Modal must render [⚡] for cached track vid_0");
+    assert!(rendered.contains("Track Zero"));
+    assert!(rendered.contains("Track One"));
 }
 
 
