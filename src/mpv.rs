@@ -351,11 +351,15 @@ impl MpvController {
         // Remove stale socket if it exists
         let _ = std::fs::remove_file(&path);
 
-        let mut child = Command::new("mpv")
-            .arg("--no-video")
+        let mut cmd = Command::new("mpv");
+        cmd.arg("--no-video")
             .arg("--really-quiet")
             .arg("--idle")
-            .arg(format!("--input-ipc-server={}", path.display()))
+            .arg(format!("--input-ipc-server={}", path.display()));
+        if cfg!(test) || std::env::var("YTM_AO_NULL").is_ok() {
+            cmd.arg("--ao=null");
+        }
+        let mut child = cmd
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
