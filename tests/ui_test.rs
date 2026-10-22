@@ -473,7 +473,23 @@ fn test_modal_key_event_parsing() {
         Some(ModalKeyAction::Close)
     );
 
-    // Quit app in modal: Ctrl+C
+    // Space toggles selection
+    assert_eq!(
+        parse_modal_key_event(make_key_event(KeyCode::Char(' '), KeyModifiers::empty())),
+        Some(ModalKeyAction::ToggleSelection)
+    );
+
+    // c and C clear selection
+    assert_eq!(
+        parse_modal_key_event(make_key_event(KeyCode::Char('c'), KeyModifiers::empty())),
+        Some(ModalKeyAction::ClearSelection)
+    );
+    assert_eq!(
+        parse_modal_key_event(make_key_event(KeyCode::Char('C'), KeyModifiers::empty())),
+        Some(ModalKeyAction::ClearSelection)
+    );
+
+    // Quit app in modal: Ctrl+C (takes precedence over clear selection)
     assert_eq!(
         parse_modal_key_event(make_key_event(KeyCode::Char('c'), KeyModifiers::CONTROL)),
         Some(ModalKeyAction::Quit)
@@ -490,6 +506,97 @@ fn test_modal_key_event_parsing() {
     rel.kind = KeyEventKind::Release;
     assert_eq!(parse_modal_key_event(rel), None);
 }
+
+#[test]
+fn test_modal_state_selection_set_pick_order_and_clear() {
+    let mut modal = ModalState::default();
+    assert!(modal.selection_set.is_empty());
+    assert!(!modal.is_selected(0));
+
+    // Select index 2, then 4, then 1 (pick order: 2, 4, 1)
+    modal.toggle_selection(2);
+    assert_eq!(modal.selection_set, vec![2]);
+    assert!(modal.is_selected(2));
+    assert!(!modal.is_selected(4));
+
+    modal.toggle_selection(4);
+    modal.toggle_selection(1);
+    assert_eq!(modal.selection_set, vec![2, 4, 1]);
+    assert!(modal.is_selected(2));
+    assert!(modal.is_selected(4));
+    assert!(modal.is_selected(1));
+    assert!(!modal.is_selected(3));
+
+    // Toggle 4 again -> unmarks and removes 4 from selection set
+    modal.toggle_selection(4);
+    assert_eq!(modal.selection_set, vec![2, 1]);
+    assert!(!modal.is_selected(4));
+
+    // Clear all selections with 'c'
+    modal.clear_selection();
+    assert!(modal.selection_set.is_empty());
+    assert!(!modal.is_selected(2));
+    assert!(!modal.is_selected(1));
+}
+
+#[test]
+fn test_modal_rendering_with_selection_indicators() {
+    let tracks = vec![
+        Track {
+            index: 0,
+            id: "id_0".to_string(),
+            title: "Track Zero".to_string(),
+        },
+        Track {
+            index: 1,
+            id: "id_1".to_string(),
+            title: "Track One".to_string(),
+        },
+        Track {
+            index: 2,
+            id: "id_2".to_string(),
+            title: "Track Two".to_string(),
+        },
+    ];
+    let queue = Queue::new(tracks);
+    let rect = ModalRect {
+        x: 0,
+        y: 0,
+        width: 40,
+        height: 5, // 1 header, 3 content, 1 footer
+    };
+    let mut modal = ModalState::default();
+    modal.open(0, 3, rect.content_height());
+
+    // Mark track 0 and track 2
+    modal.toggle_selection(0);
+    modal.toggle_selection(2);
+
+    let lines = format_modal_lines(&rect, &modal, &queue);
+    // Line 1: Track 0 is active (▶) AND selected ([x])
+    assert!(lines[1].contains("[x]"), "Track 0 should show [x]");
+    assert!(lines[1].contains("Track Zero"));
+
+    // Line 2: Track 1 is unselected ([ ])
+    assert!(lines[2].contains("[ ]"), "Track 1 should show [ ]");
+    assert!(!lines[2].contains("[x]"), "Track 1 should not show [x]");
+    assert!(lines[2].contains("Track One"));
+
+    // Line 3: Track 2 is selected ([x])
+    assert!(lines[3].contains("[x]"), "Track 2 should show [x]");
+    assert!(lines[3].contains("Track Two"));
+
+    // Clear selections and re-render
+    modal.clear_selection();
+    let lines_cleared = format_modal_lines(&rect, &modal, &queue);
+    assert!(lines_cleared[1].contains("[ ]"), "Track 0 should show [ ] after clear");
+    assert!(lines_cleared[2].contains("[ ]"), "Track 1 should show [ ] after clear");
+    assert!(lines_cleared[3].contains("[ ]"), "Track 2 should show [ ] after clear");
+    assert!(!lines_cleared[1].contains("[x]"));
+    assert!(!lines_cleared[2].contains("[x]"));
+    assert!(!lines_cleared[3].contains("[x]"));
+}
+
 
 #[test]
 fn test_modal_border_and_content_rendering_in_memory() {

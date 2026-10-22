@@ -171,6 +171,8 @@ pub enum KeyAction {
 pub enum ModalKeyAction {
     CursorDown,
     CursorUp,
+    ToggleSelection,
+    ClearSelection,
     Commit,
     Close,
     Quit,
@@ -225,6 +227,8 @@ pub fn parse_modal_key_event(event: KeyEvent) -> Option<ModalKeyAction> {
         KeyCode::Char('/') => Some(ModalKeyAction::SearchActivate),
         KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down => Some(ModalKeyAction::CursorDown),
         KeyCode::Char('k') | KeyCode::Char('K') | KeyCode::Up => Some(ModalKeyAction::CursorUp),
+        KeyCode::Char(' ') => Some(ModalKeyAction::ToggleSelection),
+        KeyCode::Char('c') | KeyCode::Char('C') => Some(ModalKeyAction::ClearSelection),
         KeyCode::Enter => Some(ModalKeyAction::Commit),
         KeyCode::Tab | KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => {
             Some(ModalKeyAction::Close)
@@ -368,6 +372,7 @@ pub struct ModalState {
     pub is_open: bool,
     pub viewer_cursor: usize,
     pub viewport_offset: usize,
+    pub selection_set: Vec<usize>,
     pub search_active: bool,
     pub search_query: String,
     pub search_cursor: usize,
@@ -385,6 +390,7 @@ impl ModalState {
     /// Opens the modal anchored and centered on the active track index.
     pub fn open(&mut self, active_cursor: usize, total_items: usize, content_height: usize) {
         self.is_open = true;
+        self.selection_set.clear();
         self.search_active = false;
         self.search_query.clear();
         self.filtered_indices.clear();
@@ -403,11 +409,31 @@ impl ModalState {
     /// Closes the modal.
     pub fn close(&mut self) {
         self.is_open = false;
+        self.selection_set.clear();
         self.search_active = false;
         self.search_query.clear();
         self.filtered_indices.clear();
         self.search_cursor = 0;
         self.search_viewport_offset = 0;
+    }
+
+    /// Toggles the selection of the item at `index`, preserving pick order.
+    pub fn toggle_selection(&mut self, index: usize) {
+        if let Some(pos) = self.selection_set.iter().position(|&i| i == index) {
+            self.selection_set.remove(pos);
+        } else {
+            self.selection_set.push(index);
+        }
+    }
+
+    /// Returns true if the item at `index` is in the selection set.
+    pub fn is_selected(&self, index: usize) -> bool {
+        self.selection_set.contains(&index)
+    }
+
+    /// Empties the selection set.
+    pub fn clear_selection(&mut self) {
+        self.selection_set.clear();
     }
 
     /// Starts search mode, saving prior cursor positions and initializing filtered indices.
@@ -688,12 +714,14 @@ pub fn format_modal_lines(
                 let is_cursor = item_index == modal.viewer_cursor;
 
                 let active_marker = if is_active { "▶ " } else { "  " };
+                let select_marker = if modal.is_selected(item_index) { "[x] " } else { "[ ] " };
                 let num_str = format!("{:>3}. ", item_index + 1);
-                let prefix = format!(" {}{}", active_marker, num_str);
+                let prefix = format!(" {}{}{}", active_marker, select_marker, num_str);
                 let prefix_len = prefix.chars().count();
 
                 let avail_title_len = content_width.saturating_sub(prefix_len + 1);
                 let title = truncate_to_width(&track.title, avail_title_len);
+
 
                 let mut row_content = format!("{}{}", prefix, title);
                 let content_chars = row_content.chars().count();

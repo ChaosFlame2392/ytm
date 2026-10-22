@@ -962,5 +962,134 @@ fn test_app_modal_search_in_shuffled_queue() {
     );
 }
 
+#[test]
+fn test_app_modal_selection_toggle_and_clear() {
+    let (mut app, _server, _) = setup_test_app();
+    app.open_modal();
+    assert!(app.modal.is_open);
+    assert!(app.modal.selection_set.is_empty());
+    assert_eq!(app.modal.viewer_cursor, 0);
+
+    // Toggle track 0 with Space
+    app.handle_modal_action(ModalKeyAction::ToggleSelection).unwrap();
+    assert_eq!(app.modal.selection_set, vec![0]);
+
+    // Move cursor down to track 1
+    app.handle_modal_action(ModalKeyAction::CursorDown).unwrap();
+    assert_eq!(app.modal.viewer_cursor, 1);
+
+    // Move cursor down to track 2 and toggle with Space
+    app.handle_modal_action(ModalKeyAction::CursorDown).unwrap();
+    assert_eq!(app.modal.viewer_cursor, 2);
+    app.handle_modal_action(ModalKeyAction::ToggleSelection).unwrap();
+    assert_eq!(app.modal.selection_set, vec![0, 2]); // Pick order: 0, 2
+
+    // Toggle track 2 again -> unmarks track 2
+    app.handle_modal_action(ModalKeyAction::ToggleSelection).unwrap();
+    assert_eq!(app.modal.selection_set, vec![0]);
+
+    // Toggle track 2 back on
+    app.handle_modal_action(ModalKeyAction::ToggleSelection).unwrap();
+    assert_eq!(app.modal.selection_set, vec![0, 2]);
+
+    // Press 'c' -> empties selection set
+    app.handle_modal_action(ModalKeyAction::ClearSelection).unwrap();
+    assert!(app.modal.selection_set.is_empty());
+}
+
+#[test]
+fn test_app_modal_commit_with_selections_rebuilds_queue_and_plays() {
+    let (mut app, mut server, downloaded) = setup_test_app();
+    // Tracks in app: [vid_0, vid_1, vid_2]
+
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+        let mut line = String::new();
+
+        // When Commit with selections [2, 0] is pressed:
+        // First track in new playback order is vid_2.
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "loadfile");
+        assert_eq!(val["command"][1], "https://www.youtube.com/watch?v=vid_2");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    app.open_modal();
+
+    // Select track 2 first, then track 0:
+    app.modal.viewer_cursor = 2;
+    app.handle_modal_action(ModalKeyAction::ToggleSelection).unwrap();
+
+    app.modal.viewer_cursor = 0;
+    app.handle_modal_action(ModalKeyAction::ToggleSelection).unwrap();
+
+    assert_eq!(app.modal.selection_set, vec![2, 0]);
+
+    // Commit with Enter
+    app.handle_modal_action(ModalKeyAction::Commit).unwrap();
+
+    // 1. Modal closed
+    assert!(!app.modal.is_open);
+
+    // 2. Queue reconstructed: selected [2, 0] first, remaining [1] after -> [2, 0, 1]
+    assert_eq!(app.queue.playback_order, vec![2, 0, 1]);
+    assert_eq!(app.queue.cursor, 0);
+    assert_eq!(app.queue.current_track().unwrap().id, "vid_2");
+
+    // 3. Next track in queue is vid_0 -> prefetcher should be triggered for vid_0
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(downloaded.lock().unwrap().contains(&"vid_0".to_string()));
+
+    responder.join().unwrap();
+}
+
+#[test]
+fn test_app_modal_commit_empty_selection_preserves_single_jump() {
+    let (mut app, mut server, _downloaded) = setup_test_app();
+    // Tracks in app: [vid_0, vid_1, vid_2]
+
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+        let mut line = String::new();
+
+        // Empty selection set commit on hovered track 1 -> loadfile vid_1
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "loadfile");
+        assert_eq!(val["command"][1], "https://www.youtube.com/watch?v=vid_1");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    app.open_modal();
+    assert!(app.modal.selection_set.is_empty());
+
+    // Move to track 1 without selecting anything
+    app.modal.viewer_cursor = 1;
+
+    // Commit with Enter
+    app.handle_modal_action(ModalKeyAction::Commit).unwrap();
+
+    // 1. Modal closed
+    assert!(!app.modal.is_open);
+
+    // 2. Queue order preserved: [0, 1, 2], cursor jumped to 1
+    assert_eq!(app.queue.playback_order, vec![0, 1, 2]);
+    assert_eq!(app.queue.cursor, 1);
+    assert_eq!(app.queue.current_track().unwrap().id, "vid_1");
+
+    responder.join().unwrap();
+}
+
 
 

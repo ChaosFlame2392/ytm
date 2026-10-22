@@ -150,11 +150,28 @@ impl App {
                     self.modal.move_cursor_up(content_height);
                 }
             }
+            ModalKeyAction::ToggleSelection => {
+                let total_items = self.queue.playback_order.len();
+                if total_items > 0 && self.modal.viewer_cursor < total_items {
+                    self.modal.toggle_selection(self.modal.viewer_cursor);
+                }
+            }
+            ModalKeyAction::ClearSelection => {
+                self.modal.clear_selection();
+            }
             ModalKeyAction::Commit => {
-                let target_idx = self.modal.viewer_cursor;
-                self.close_modal();
-                if self.queue.jump_to(target_idx).is_some() {
-                    self.play_current()?;
+                if !self.modal.selection_set.is_empty() {
+                    let selections = self.modal.selection_set.clone();
+                    self.close_modal();
+                    if self.queue.reorder_with_selection(&selections).is_some() {
+                        self.play_current()?;
+                    }
+                } else {
+                    let target_idx = self.modal.viewer_cursor;
+                    self.close_modal();
+                    if self.queue.jump_to(target_idx).is_some() {
+                        self.play_current()?;
+                    }
                 }
             }
             ModalKeyAction::Close => {
@@ -183,6 +200,7 @@ impl App {
         }
         Ok(true)
     }
+
 
     /// Renders the floating queue modal to the given writer.
     pub fn render_modal<W: Write>(&self, writer: &mut W) -> io::Result<()> {
@@ -298,6 +316,7 @@ impl App {
                                     }
                                     let _ = self.render_modal(&mut stdout);
                                 }
+
                             }
                         }
                     } else if let Some(action) = parse_key_event(key_event) {

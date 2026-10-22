@@ -215,3 +215,71 @@ fn test_queue_jump_to_natural_and_shuffled_and_bounds() {
     assert_eq!(empty.jump_to(0), None);
     assert_eq!(empty.cursor, 0);
 }
+
+#[test]
+fn test_queue_reorder_with_selection_pick_order_and_remaining() {
+    let mut queue = Queue::new(make_tracks(5));
+    // Initial order: [0, 1, 2, 3, 4]
+    assert_eq!(queue.playback_order, vec![0, 1, 2, 3, 4]);
+
+    // Pick indices: [3, 1, 4]
+    // Tracks at these indices are track 3, track 1, track 4.
+    // Remaining unselected tracks in relative order: track 0, track 2.
+    let first = queue.reorder_with_selection(&[3, 1, 4]).expect("returns first track");
+    assert_eq!(first.id, "id_003");
+    assert_eq!(queue.cursor, 0);
+    assert_eq!(queue.playback_order, vec![3, 1, 4, 0, 2]);
+    assert_eq!(queue.current_track().unwrap().id, "id_003");
+    assert_eq!(queue.peek_next().unwrap().id, "id_001");
+}
+
+#[test]
+fn test_queue_reorder_with_selection_shuffled_state() {
+    let mut queue = Queue::new(make_tracks(5));
+    queue.shuffle = true;
+    queue.playback_order = vec![4, 2, 0, 3, 1];
+    queue.cursor = 2; // currently at track 0
+
+    // Selected indices in the active playback order: [3, 1]
+    // Index 3 is track 3. Index 1 is track 2.
+    // Remaining unselected indices: 0 (track 4), 2 (track 0), 4 (track 1).
+    // Expected new playback order: [3, 2, 4, 0, 1].
+    let first = queue.reorder_with_selection(&[3, 1]).expect("returns first track");
+    assert_eq!(first.id, "id_003");
+    assert_eq!(queue.cursor, 0);
+    assert_eq!(queue.playback_order, vec![3, 2, 4, 0, 1]);
+    assert_eq!(queue.peek_next().unwrap().id, "id_002");
+}
+
+#[test]
+fn test_queue_reorder_with_selection_edge_cases() {
+    // 1. Empty selection set maintains current relative order and resets cursor to 0
+    let mut queue = Queue::new(make_tracks(4));
+    queue.cursor = 2;
+    let first = queue.reorder_with_selection(&[]).expect("returns first track");
+    assert_eq!(first.id, "id_000");
+    assert_eq!(queue.cursor, 0);
+    assert_eq!(queue.playback_order, vec![0, 1, 2, 3]);
+
+    // 2. Out-of-bounds indices and duplicate indices in selection set
+    let mut queue2 = Queue::new(make_tracks(4));
+    // Index 2 is track 2. Duplicate 2 should be ignored. Index 99 is out-of-bounds.
+    let first2 = queue2.reorder_with_selection(&[2, 99, 2, 0]).expect("handles duplicates and OOB");
+    assert_eq!(first2.id, "id_002");
+    assert_eq!(queue2.cursor, 0);
+    // Picked: [2, 0]. Remaining: [1, 3]
+    assert_eq!(queue2.playback_order, vec![2, 0, 1, 3]);
+
+    // 3. Empty queue returns None
+    let mut empty = Queue::default();
+    assert_eq!(empty.reorder_with_selection(&[0, 1]), None);
+    assert_eq!(empty.cursor, 0);
+
+    // 4. Single-track queue
+    let mut single = Queue::new(make_tracks(1));
+    let s_first = single.reorder_with_selection(&[0]).expect("single track");
+    assert_eq!(s_first.id, "id_000");
+    assert_eq!(single.cursor, 0);
+    assert_eq!(single.playback_order, vec![0]);
+}
+
