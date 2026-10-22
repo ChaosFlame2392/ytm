@@ -1,0 +1,354 @@
+use crate::playlist::Track;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Queue {
+    pub tracks: Vec<Track>,
+    pub queue: Vec<usize>,
+    pub cursor: usize,
+    pub shuffle: bool,
+    pub single_loop: bool,
+}
+
+impl Default for Queue {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
+impl Queue {
+    pub fn new(tracks: Vec<Track>) -> Self {
+        let n = tracks.len();
+        Self {
+            tracks,
+            queue: (0..n).collect(),
+            cursor: 0,
+            shuffle: false,
+            single_loop: false,
+        }
+    }
+
+    pub fn current_track(&self) -> Option<&Track> {
+        let idx = *self.queue.get(self.cursor)?;
+        self.tracks.get(idx)
+    }
+
+    pub fn peek_next(&self) -> Option<&Track> {
+        if self.queue.is_empty() {
+            return None;
+        }
+        let next_cursor = if self.cursor + 1 < self.queue.len() {
+            self.cursor + 1
+        } else {
+            0
+        };
+        let idx = *self.queue.get(next_cursor)?;
+        self.tracks.get(idx)
+    }
+
+    pub fn natural_index(&self) -> Option<usize> {
+        self.queue.get(self.cursor).copied()
+    }
+
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> Option<&Track> {
+        if self.queue.is_empty() {
+            return None;
+        }
+        if self.single_loop {
+            return self.current_track();
+        }
+        if self.cursor + 1 < self.queue.len() {
+            self.cursor += 1;
+        } else {
+            self.cursor = 0;
+        }
+        self.current_track()
+    }
+
+    pub fn prev(&mut self) -> Option<&Track> {
+        if self.queue.is_empty() {
+            return None;
+        }
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        } else {
+            self.cursor = 0;
+        }
+        self.current_track()
+    }
+
+    pub fn toggle_loop(&mut self) -> bool {
+        self.single_loop = !self.single_loop;
+        self.single_loop
+    }
+
+    pub fn reset_to_top(&mut self) {
+        self.cursor = 0;
+        if self.tracks.is_empty() {
+            self.queue.clear();
+            return;
+        }
+        self.queue = (0..self.tracks.len()).collect();
+        if self.shuffle && self.queue.len() > 1 {
+            use rand::seq::SliceRandom;
+            self.queue[1..].shuffle(&mut rand::thread_rng());
+        }
+    }
+
+    pub fn toggle_shuffle_with_rng<R: rand::Rng + ?Sized>(&mut self, rng: &mut R) -> bool {
+        self.shuffle = !self.shuffle;
+        if self.shuffle {
+            if self.cursor < self.queue.len() {
+                use rand::seq::SliceRandom;
+                self.queue[self.cursor + 1..].shuffle(rng);
+            }
+        } else {
+            let n = self.tracks.len();
+            if n > 0 && self.cursor < self.queue.len() {
+                let natural_idx = self.queue[self.cursor];
+                self.queue[self.cursor + 1..].sort_by_key(|&idx| {
+                    if idx > natural_idx {
+                        idx - natural_idx
+                    } else {
+                        idx + n - natural_idx
+                    }
+                });
+            }
+        }
+        self.shuffle
+    }
+
+    pub fn toggle_shuffle(&mut self) -> bool {
+        self.toggle_shuffle_with_rng(&mut rand::thread_rng())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_tracks(n: usize) -> Vec<Track> {
+        (0..n)
+            .map(|i| Track {
+                index: i,
+                id: format!("video_{}", i),
+                title: format!("Title {}", i),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_natural_sequential_playback() {
+        let tracks = sample_tracks(3);
+        let mut queue = Queue::new(tracks);
+
+        assert_eq!(queue.cursor, 0);
+        assert_eq!(queue.natural_index(), Some(0));
+        assert_eq!(queue.current_track().unwrap().id, "video_0");
+
+        // Advance to 1
+        let t1 = queue.next().expect("track 1");
+        assert_eq!(t1.id, "video_1");
+        assert_eq!(queue.cursor, 1);
+        assert_eq!(queue.natural_index(), Some(1));
+
+        // Advance to 2
+        let t2 = queue.next().expect("track 2");
+        assert_eq!(t2.id, "video_2");
+        assert_eq!(queue.cursor, 2);
+        assert_eq!(queue.natural_index(), Some(2));
+
+        // Advance past end -> wraps to 0
+        let t0 = queue.next().expect("track 0");
+        assert_eq!(t0.id, "video_0");
+        assert_eq!(queue.cursor, 0);
+        assert_eq!(queue.natural_index(), Some(0));
+
+        // prev() from 0 stays at 0
+        let p0 = queue.prev().expect("stays at 0");
+        assert_eq!(p0.id, "video_0");
+        assert_eq!(queue.cursor, 0);
+
+        // Advance to 1 then prev back to 0
+        queue.next();
+        assert_eq!(queue.cursor, 1);
+        let p_prev = queue.prev().expect("back to 0");
+        assert_eq!(p_prev.id, "video_0");
+        assert_eq!(queue.cursor, 0);
+    }
+
+    #[test]
+    fn test_empty_and_single_track_edge_cases() {
+        // Empty queue
+        let mut empty = Queue::default();
+        assert_eq!(empty.cursor, 0);
+        assert_eq!(empty.current_track(), None);
+        assert_eq!(empty.natural_index(), None);
+        assert_eq!(empty.next(), None);
+        assert_eq!(empty.prev(), None);
+
+        // Single track
+        let mut single = Queue::new(sample_tracks(1));
+        assert_eq!(single.cursor, 0);
+        assert_eq!(single.natural_index(), Some(0));
+        assert_eq!(single.current_track().unwrap().id, "video_0");
+
+        // Next wraps back to 0
+        assert_eq!(single.next().unwrap().id, "video_0");
+        assert_eq!(single.cursor, 0);
+        assert_eq!(single.prev().unwrap().id, "video_0");
+        assert_eq!(single.cursor, 0);
+    }
+
+    #[test]
+    fn test_peek_next_behavior() {
+        let empty = Queue::default();
+        assert_eq!(empty.peek_next(), None);
+
+        let single = Queue::new(sample_tracks(1));
+        assert_eq!(single.peek_next().unwrap().id, "video_0");
+
+        let mut queue = Queue::new(sample_tracks(3));
+        // At 0, peek_next returns track 1 without advancing cursor
+        assert_eq!(queue.peek_next().unwrap().id, "video_1");
+        assert_eq!(queue.cursor, 0);
+
+        queue.next();
+        assert_eq!(queue.cursor, 1);
+        assert_eq!(queue.peek_next().unwrap().id, "video_2");
+        assert_eq!(queue.cursor, 1);
+
+        queue.next();
+        assert_eq!(queue.cursor, 2);
+        // At last element, peek_next wraps to track 0
+        assert_eq!(queue.peek_next().unwrap().id, "video_0");
+        assert_eq!(queue.cursor, 2);
+    }
+
+    #[test]
+    fn test_toggle_loop_prevents_advancement() {
+        let mut queue = Queue::new(sample_tracks(3));
+        assert!(!queue.single_loop);
+
+        // Turn loop on
+        assert!(queue.toggle_loop());
+        assert!(queue.single_loop);
+
+        // next() stays on track 0
+        let t0 = queue.next().expect("stays on track 0");
+        assert_eq!(t0.id, "video_0");
+        assert_eq!(queue.cursor, 0);
+
+        let t0_again = queue.next().expect("still track 0");
+        assert_eq!(t0_again.id, "video_0");
+        assert_eq!(queue.cursor, 0);
+
+        // Turn loop off
+        assert!(!queue.toggle_loop());
+        assert!(!queue.single_loop);
+
+        // next() advances to track 1
+        let t1 = queue.next().expect("advances to track 1");
+        assert_eq!(t1.id, "video_1");
+        assert_eq!(queue.cursor, 1);
+    }
+
+    #[test]
+    fn test_reset_to_top() {
+        let mut queue = Queue::new(sample_tracks(5));
+        queue.next();
+        queue.next();
+        queue.next();
+        assert_eq!(queue.cursor, 3);
+        assert_eq!(queue.natural_index(), Some(3));
+
+        queue.reset_to_top();
+        assert_eq!(queue.cursor, 0);
+        assert_eq!(queue.natural_index(), Some(0));
+        assert_eq!(queue.current_track().unwrap().id, "video_0");
+
+        // Edge case: empty queue
+        let mut empty = Queue::default();
+        empty.reset_to_top();
+        assert_eq!(empty.cursor, 0);
+        assert_eq!(empty.current_track(), None);
+    }
+
+    #[test]
+    fn test_toggle_shuffle_on_randomizes_upcoming_preserving_current() {
+        let n = 20;
+        let mut queue = Queue::new(sample_tracks(n));
+        queue.next();
+        queue.next();
+        assert_eq!(queue.cursor, 2);
+        assert_eq!(queue.natural_index(), Some(2));
+        assert_eq!(queue.current_track().unwrap().id, "video_2");
+
+        let before_upcoming = queue.queue[3..].to_vec();
+        assert_eq!(before_upcoming, (3..n).collect::<Vec<_>>());
+
+        assert!(queue.toggle_shuffle());
+        assert!(queue.shuffle);
+        // Current track and position preserved
+        assert_eq!(queue.cursor, 2);
+        assert_eq!(queue.natural_index(), Some(2));
+        assert_eq!(queue.current_track().unwrap().id, "video_2");
+
+        // History preserved
+        assert_eq!(&queue.queue[0..2], &[0, 1]);
+
+        // Upcoming shuffled: same set of elements, but reordered
+        let mut after_upcoming_sorted = queue.queue[3..].to_vec();
+        after_upcoming_sorted.sort();
+        assert_eq!(after_upcoming_sorted, (3..n).collect::<Vec<_>>());
+
+        // Extremely low probability (1/17! < 1e-14) of being identical to sorted
+        assert_ne!(queue.queue[3..], before_upcoming);
+    }
+
+    #[test]
+    fn test_toggle_shuffle_off_restores_natural_order() {
+        // Scenario 1: Start at index 0, scramble upcoming, toggle OFF
+        let mut queue = Queue::new(sample_tracks(5));
+        queue.shuffle = true;
+        queue.queue = vec![0, 4, 2, 1, 3];
+        queue.cursor = 0;
+
+        assert!(!queue.toggle_shuffle()); // toggled OFF
+        assert!(!queue.shuffle);
+        assert_eq!(queue.cursor, 0);
+        assert_eq!(queue.natural_index(), Some(0));
+        assert_eq!(queue.current_track().unwrap().id, "video_0");
+        // Upcoming tracks restored in sequential natural order 1..5
+        assert_eq!(queue.queue, vec![0, 1, 2, 3, 4]);
+
+        // Scenario 2: At track 2 with remaining upcoming scrambled
+        let mut queue2 = Queue::new(sample_tracks(6));
+        queue2.shuffle = true;
+        queue2.cursor = 2;
+        queue2.queue = vec![0, 1, 2, 5, 3, 4];
+
+        assert!(!queue2.toggle_shuffle()); // toggled OFF
+        assert_eq!(queue2.cursor, 2);
+        assert_eq!(queue2.natural_index(), Some(2));
+        assert_eq!(queue2.current_track().unwrap().id, "video_2");
+        // Remaining unplayed upcoming 3, 4, 5 reordered sequentially
+        assert_eq!(queue2.queue, vec![0, 1, 2, 3, 4, 5]);
+
+        // Scenario 3: Wrap-around case: playing track 4 in 6-track playlist, remaining {1, 5, 0}
+        let mut queue3 = Queue::new(sample_tracks(6));
+        queue3.shuffle = true;
+        queue3.cursor = 2;
+        queue3.queue = vec![2, 3, 4, 1, 5, 0];
+        // At cursor 2, track is 4 (natural_index = 4). Upcoming are 1, 5, 0.
+        assert_eq!(queue3.natural_index(), Some(4));
+
+        assert!(!queue3.toggle_shuffle()); // toggled OFF
+        assert_eq!(queue3.cursor, 2);
+        assert_eq!(queue3.natural_index(), Some(4));
+        // Order starting from natural_index + 1 (5), wrapping to 0, 1:
+        // Upcoming must be [5, 0, 1]!
+        assert_eq!(queue3.queue, vec![2, 3, 4, 5, 0, 1]);
+        assert_eq!(queue3.peek_next().unwrap().id, "video_5");
+    }
+}

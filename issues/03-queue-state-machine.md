@@ -4,10 +4,10 @@
 
 **Blocked by:** 01: Playlist Metadata & URL Storage, 02: Headless MPV IPC Audio Controller
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Maintain `tracks` list, current track pointer, and natural index.
-- [ ] Implement `next()` and `prev()` respecting active loop and shuffle state.
-- [ ] Implement `toggle_shuffle()`: when enabled, randomizes upcoming queue; when disabled, snaps upcoming queue back to `natural_index + 1`.
-- [ ] Implement `reset_to_top()`: sets current track back to index 0 (top of the iceberg).
-- [ ] Unit tests for queue transitions and shuffle toggle behavior.
+- [x] Maintain `tracks` list, current track pointer, and natural index.
+- [x] Implement `next()` and `prev()` respecting active loop and shuffle state.
+- [x] Implement `toggle_shuffle()`: when enabled, randomizes upcoming queue; when disabled, snaps upcoming queue back to `natural_index + 1`.
+- [x] Implement `reset_to_top()`: sets current track back to index 0 (top of the iceberg).
+- [x] Unit tests for queue transitions and shuffle toggle behavior.
