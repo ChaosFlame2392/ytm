@@ -366,8 +366,36 @@ impl MpvController {
         // Remove stale socket if it exists
         let _ = std::fs::remove_file(&path);
 
-        let mut cmd = Command::new("mpv");
-        cmd.arg("--no-video")
+        let binary = if let Ok(custom_path) = std::env::var("YTM_MPV_PATH") {
+            custom_path
+        } else if let Ok(home) = std::env::var("HOME") {
+            let headless = PathBuf::from(home).join(".local/bin/mpv-headless");
+            if headless.is_file() {
+                headless.to_string_lossy().into_owned()
+            } else {
+                "mpv".to_string()
+            }
+        } else {
+            "mpv".to_string()
+        };
+
+        let mut cmd = Command::new(binary);
+        cmd.arg("--no-config")
+            .arg("--no-video")
+            .arg("--vo=null")
+            .arg("--audio-display=no")
+            .arg("--macos-app-activation-policy=prohibited")
+            .arg("--input-media-keys=no")
+            .arg("--no-osc")
+            .arg("--no-osd-bar")
+            .arg("--sub-auto=no")
+            .arg("--sub-font-provider=none")
+            .arg("--demuxer-max-bytes=8M")
+            .arg("--demuxer-max-back-bytes=2M")
+            .arg("--demuxer-readahead-secs=20")
+            .arg("--audio-reversal-buffer=0")
+            .arg("--video-reversal-buffer=0")
+            .arg("--stream-buffer-size=32k")
             .arg("--really-quiet")
             .arg("--idle")
             .arg(format!("--input-ipc-server={}", path.display()));
