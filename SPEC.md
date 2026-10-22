@@ -21,7 +21,12 @@ A native, ultra-lightweight Rust CLI utility (`ytm`) consuming ~15–20 MB of RA
 9. As a Mac owner, I want audio cache stored in standard `~/Library/Caches/ytm/audio/` and capped at 500MB, so that disk cleaner utilities like Mole can safely scan and purge it without breaking the player.
 10. As a user, I want to pass a new playlist URL via CLI (`ytm <URL>`), so that I can swap playlists without editing configuration files.
 11. As a listener, I want standard playback controls (`Space` for pause/resume, `>` for next, `<` for prev, `l` for single-track loop), so that controlling music feels familiar.
-12. As a terminal user, I want `q` and `Ctrl+C` to quit cleanly, so that all background audio processes terminate and the terminal cursor is properly restored.
+12. As a listener, I want to press `h`/`l` or `Left`/`Right` arrow keys to seek backward or forward by 5 seconds within the playing track, so that I can scrub audio without skipping tracks.
+13. As a listener, I want `ytm` to clear the terminal screen on startup and load Track 1 in a paused state, so that music does not blare unexpectedly before I am ready.
+14. As a listener, I want to press `Tab` to open an NVIM-style floating queue modal in an alternate screen buffer, so that I can view and scroll through the active playlist arbitrarily without cluttering terminal scrollback.
+15. As a listener in the queue modal, I want to select tracks with `Space` and play them with `Enter`, or press `Enter` on a single hovered track to jump directly to it, so that I have instant control over playback order.
+16. As a listener in the queue modal, I want to press `/` to live-filter tracks by title and resolve search directly into the queue context, so that I can find tracks instantly.
+17. As a terminal user, I want `q` and `Ctrl+C` to quit cleanly, so that all background audio processes terminate and the terminal cursor is properly restored.
 
 ## Implementation Decisions
 
@@ -36,6 +41,11 @@ A native, ultra-lightweight Rust CLI utility (`ytm`) consuming ~15–20 MB of RA
 - **Queue State Machine:**
   - Maintains `natural_index` (original position in playlist) and `queue` (active playback order).
   - Toggling shuffle preserves `current_song_id`, reshuffles remaining tracks on enable, and restores linear order starting from `natural_index + 1` on disable.
+  - Supports arbitrary track jumps and custom queue reordering via selection sets.
+- **In-Track Seeking:**
+  - `MpvController` exposes relative 5s seeking via MPV IPC `["seek", "<seconds>", "relative"]`, with 0:00 clamp on rewind and EOF advancement on duration exceed.
+- **Floating Queue Modal:**
+  - Rendered in crossterm's alternate screen buffer with rounded unicode borders, viewport scrolling centered on active track, live `/` search filter, and `Space` selection set.
 
 ## Testing Decisions
 
