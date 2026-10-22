@@ -4,9 +4,9 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Support reading active playlist URL from `~/Library/Caches/ytm/playlist.url`, defaulting to Chills playlist.
-- [ ] Support passing a new URL argument to swap the active playlist without editing config.
-- [ ] Extract and format tracks into `<index>\t<id>\t<title>` via `yt-dlp --no-warnings --flat-playlist`.
-- [ ] Auto-sync if cache is missing or older than 15 minutes.
+- [x] Support reading active playlist URL from `~/Library/Caches/ytm/playlist.url`, defaulting to Chills playlist.
+- [x] Support passing a new URL argument to swap the active playlist without editing config.
+- [x] Extract and format tracks into `<index>\t<id>\t<title>` via `yt-dlp --no-warnings --flat-playlist`.
+- [x] Auto-sync if cache is missing or older than 15 minutes.
