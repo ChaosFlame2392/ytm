@@ -4,16 +4,16 @@
 
 **Blocked by:** 06-1: Clean Screen Startup & In-Track Seeking
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Pressing `Tab` enters the alternate screen buffer and displays the centered floating modal.
-- [ ] Modal border renders cleanly using rounded unicode box-drawing characters (`╭─╮│╰─╯`).
-- [ ] Modal dimensions dynamically scale to ~80% width and ~70% height of terminal columns and rows.
-- [ ] Opening the modal centers the viewport and cursor on the currently playing track.
-- [ ] `j` / `Down` moves the Viewer Cursor down; `k` / `Up` moves the Viewer Cursor up.
-- [ ] Viewport scrolling dynamically keeps the cursor visible for playlists larger than the modal height.
-- [ ] Header shows track count and position badge; footer shows navigation hints.
-- [ ] Pressing `Enter` on a highlighted track switches playback to that track and dismisses the modal.
-- [ ] Pressing `Tab`, `q`, or `Esc` dismisses the modal and restores the 2-line status bar without altering playback.
-- [ ] Unit tests in `tests/ui_test.rs` verify modal rendering, borders, and viewport calculations.
-- [ ] Integration tests in `tests/app_test.rs` verify modal opening, navigation, and track jump.
+- [x] Pressing `Tab` enters the alternate screen buffer and displays the centered floating modal.
+- [x] Modal border renders cleanly using rounded unicode box-drawing characters (`╭─╮│╰─╯`).
+- [x] Modal dimensions dynamically scale to ~80% width and ~70% height of terminal columns and rows.
+- [x] Opening the modal centers the viewport and cursor on the currently playing track.
+- [x] `j` / `Down` moves the Viewer Cursor down; `k` / `Up` moves the Viewer Cursor up.
+- [x] Viewport scrolling dynamically keeps the cursor visible for playlists larger than the modal height.
+- [x] Header shows track count and position badge; footer shows navigation hints.
+- [x] Pressing `Enter` on a highlighted track switches playback to that track and dismisses the modal.
+- [x] Pressing `Tab`, `q`, or `Esc` dismisses the modal and restores the 2-line status bar without altering playback.
+- [x] Unit tests in `tests/ui_test.rs` verify modal rendering, borders, and viewport calculations.
+- [x] Integration tests in `tests/app_test.rs` verify modal opening, navigation, and track jump.

@@ -93,6 +93,17 @@ impl Queue {
         self.current_track()
     }
 
+    /// Directly jumps the queue cursor to `cursor_index` and returns the track.
+    /// Returns None and leaves the cursor unchanged if `cursor_index` is out of bounds.
+    pub fn jump_to(&mut self, cursor_index: usize) -> Option<&Track> {
+        if cursor_index < self.playback_order.len() {
+            self.cursor = cursor_index;
+            self.current_track()
+        } else {
+            None
+        }
+    }
+
     pub fn toggle_loop(&mut self) -> bool {
         self.single_loop = !self.single_loop;
         self.single_loop

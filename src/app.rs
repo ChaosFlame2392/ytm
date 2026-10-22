@@ -3,8 +3,9 @@ use crate::mpv::{EndFileReason, MpvController, MpvError, MpvEvent};
 use crate::prefetch::AudioPrefetcher;
 use crate::queue::Queue;
 use crate::ui::{
-    parse_key_event, render_status_bar, setup_signal_handler, KeyAction, StatusState,
-    TerminalGuard,
+    calculate_modal_rect, enter_alternate_screen, leave_alternate_screen, parse_key_event,
+    parse_modal_key_event, render_floating_modal, render_status_bar, setup_signal_handler,
+    KeyAction, ModalKeyAction, ModalState, StatusState, TerminalGuard,
 };
 use std::io::{self, Write};
 use std::sync::atomic::Ordering;
@@ -17,6 +18,7 @@ pub struct App {
     pub cache: AudioCache,
     pub prefetcher: AudioPrefetcher,
     pub mpv: MpvController,
+    pub modal: ModalState,
 }
 
 impl App {
@@ -32,6 +34,7 @@ impl App {
             cache,
             prefetcher,
             mpv,
+            modal: ModalState::default(),
         }
     }
 
@@ -98,11 +101,70 @@ impl App {
             KeyAction::ToggleLoop => {
                 self.queue.toggle_loop();
             }
+            KeyAction::OpenModal => {
+                self.open_modal();
+            }
             KeyAction::Quit => {
                 return Ok(false);
             }
         }
         Ok(true)
+    }
+
+    /// Opens the floating queue modal anchored and centered on the active track.
+    pub fn open_modal(&mut self) {
+        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let rect = calculate_modal_rect(cols, rows);
+        self.modal.open(
+            self.queue.cursor,
+            self.queue.playback_order.len(),
+            rect.content_height(),
+        );
+    }
+
+    /// Closes the floating queue modal.
+    pub fn close_modal(&mut self) {
+        self.modal.close();
+    }
+
+    /// Handles user actions inside the floating queue modal.
+    /// Returns `Ok(false)` if the application should terminate.
+    pub fn handle_modal_action(&mut self, action: ModalKeyAction) -> Result<bool, MpvError> {
+        match action {
+            ModalKeyAction::CursorDown => {
+                let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+                let rect = calculate_modal_rect(cols, rows);
+                self.modal
+                    .move_cursor_down(self.queue.playback_order.len(), rect.content_height());
+            }
+            ModalKeyAction::CursorUp => {
+                let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+                let rect = calculate_modal_rect(cols, rows);
+                self.modal.move_cursor_up(rect.content_height());
+            }
+            ModalKeyAction::Commit => {
+                let target_idx = self.modal.viewer_cursor;
+                self.close_modal();
+                if self.queue.jump_to(target_idx).is_some() {
+                    self.play_current()?;
+                }
+            }
+            ModalKeyAction::Close => {
+                self.close_modal();
+            }
+            ModalKeyAction::Quit => {
+                self.close_modal();
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Renders the floating queue modal to the given writer.
+    pub fn render_modal<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let rect = calculate_modal_rect(cols, rows);
+        render_floating_modal(writer, &rect, &self.modal, &self.queue)
     }
 
     /// Processes MPV IPC events, advancing track automatically on EOF.
@@ -171,25 +233,67 @@ impl App {
                 let _ = self.handle_mpv_event(ev);
             }
 
-            let _ = self.render_status(&mut stdout);
+            if self.modal.is_open {
+                let _ = self.render_modal(&mut stdout);
+            } else {
+                let _ = self.render_status(&mut stdout);
+            }
 
             if crossterm::event::poll(tick_rate)? {
                 if let crossterm::event::Event::Key(key_event) = crossterm::event::read()? {
-                    if let Some(action) = parse_key_event(key_event) {
-                        let keep_running = self.handle_action(action)?;
-                        if !keep_running {
-                            break;
+                    if self.modal.is_open {
+                        if let Some(modal_action) = parse_modal_key_event(key_event) {
+                            match modal_action {
+                                ModalKeyAction::Close => {
+                                    self.close_modal();
+                                    let _ = leave_alternate_screen(&mut stdout);
+                                    let _ = self.render_status(&mut stdout);
+                                }
+                                ModalKeyAction::Commit => {
+                                    let keep_running = self.handle_modal_action(modal_action)?;
+                                    let _ = leave_alternate_screen(&mut stdout);
+                                    let _ = self.render_status(&mut stdout);
+                                    if !keep_running {
+                                        break;
+                                    }
+                                }
+                                ModalKeyAction::Quit => {
+                                    self.close_modal();
+                                    let _ = leave_alternate_screen(&mut stdout);
+                                    break;
+                                }
+                                ModalKeyAction::CursorDown | ModalKeyAction::CursorUp => {
+                                    let keep_running = self.handle_modal_action(modal_action)?;
+                                    if !keep_running {
+                                        break;
+                                    }
+                                    let _ = self.render_modal(&mut stdout);
+                                }
+                            }
                         }
-                        while let Some(ev) = self.mpv.poll_event() {
-                            let _ = self.handle_mpv_event(ev);
+                    } else if let Some(action) = parse_key_event(key_event) {
+                        if action == KeyAction::OpenModal {
+                            let _ = enter_alternate_screen(&mut stdout);
+                            self.open_modal();
+                            let _ = self.render_modal(&mut stdout);
+                        } else {
+                            let keep_running = self.handle_action(action)?;
+                            if !keep_running {
+                                break;
+                            }
+                            while let Some(ev) = self.mpv.poll_event() {
+                                let _ = self.handle_mpv_event(ev);
+                            }
+                            let _ = self.render_status(&mut stdout);
                         }
-                        let _ = self.render_status(&mut stdout);
                     }
                 }
             }
         }
 
-
+        if self.modal.is_open {
+            let _ = leave_alternate_screen(&mut stdout);
+        }
         guard.leave();
         let _ = self.mpv.quit();
         Ok(())

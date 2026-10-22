@@ -174,3 +174,44 @@ fn test_empty_and_single_track_behavior() {
     assert!(!single.toggle_shuffle());
     assert_eq!(single.current_track().unwrap().id, "id_000");
 }
+
+#[test]
+fn test_queue_jump_to_natural_and_shuffled_and_bounds() {
+    let mut queue = Queue::new(make_tracks(5));
+    assert_eq!(queue.cursor, 0);
+
+    // Jump to index 2 in natural order
+    let track = queue.jump_to(2).expect("valid index 2");
+    assert_eq!(track.id, "id_002");
+    assert_eq!(queue.cursor, 2);
+    assert_eq!(queue.natural_index(), Some(2));
+
+    // Jump to index 4 (last item)
+    let track = queue.jump_to(4).expect("valid index 4");
+    assert_eq!(track.id, "id_004");
+    assert_eq!(queue.cursor, 4);
+    assert_eq!(queue.natural_index(), Some(4));
+
+    // Out of bounds jump: does not change cursor and returns None
+    assert_eq!(queue.jump_to(5), None);
+    assert_eq!(queue.cursor, 4);
+    assert_eq!(queue.jump_to(100), None);
+    assert_eq!(queue.cursor, 4);
+
+    // Jump in shuffled state
+    assert!(queue.toggle_shuffle());
+    let target_idx = 1;
+    let expected_track_id = queue.tracks[queue.playback_order[target_idx]].id.clone();
+    let track = queue.jump_to(target_idx).expect("valid jump in shuffled queue");
+    assert_eq!(track.id, expected_track_id);
+    assert_eq!(queue.cursor, target_idx);
+
+    // Jump out of bounds in shuffled state
+    assert_eq!(queue.jump_to(10), None);
+    assert_eq!(queue.cursor, target_idx);
+
+    // Edge case: Empty queue
+    let mut empty = Queue::default();
+    assert_eq!(empty.jump_to(0), None);
+    assert_eq!(empty.cursor, 0);
+}

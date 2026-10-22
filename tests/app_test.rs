@@ -6,7 +6,7 @@ use ytm::mpv::{EndFileReason, MpvController, MpvEvent};
 use ytm::playlist::Track;
 use ytm::prefetch::{AudioDownloader, AudioPrefetcher};
 use ytm::queue::Queue;
-use ytm::ui::KeyAction;
+use ytm::ui::{KeyAction, ModalKeyAction};
 
 struct MockDownloader {
     downloaded: Arc<Mutex<Vec<String>>>,
@@ -707,6 +707,123 @@ fn test_app_status_line1_immediate_update_on_seek() {
         rendered.contains("[▶] Track Zero (00:45 / 03:00)"),
         "Status should render immediately with new seeked position"
     );
+
+    responder.join().unwrap();
+}
+
+#[test]
+fn test_app_modal_open_and_close_without_affecting_playback() {
+    let (mut app, _server, _) = setup_test_app();
+    assert_eq!(app.queue.cursor, 0);
+    assert!(!app.modal.is_open);
+
+    // Open modal via OpenModal action
+    app.handle_action(KeyAction::OpenModal).unwrap();
+    assert!(app.modal.is_open);
+    assert_eq!(app.modal.viewer_cursor, 0);
+
+    // Move cursor in modal
+    app.handle_modal_action(ModalKeyAction::CursorDown).unwrap();
+    assert_eq!(app.modal.viewer_cursor, 1);
+    // Active playing track in queue is still 0
+    assert_eq!(app.queue.cursor, 0);
+
+    // Close modal via Close
+    app.handle_modal_action(ModalKeyAction::Close).unwrap();
+    assert!(!app.modal.is_open);
+    // Queue cursor remains unaffected
+    assert_eq!(app.queue.cursor, 0);
+    assert_eq!(app.queue.current_track().unwrap().id, "vid_0");
+}
+
+#[test]
+fn test_app_modal_navigation_and_track_jump() {
+    let (mut app, mut server, downloaded) = setup_test_app();
+
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+        let mut line = String::new();
+
+        // Commit jump to vid_2 -> loadfile https://www.youtube.com/watch?v=vid_2
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "loadfile");
+        assert_eq!(val["command"][1], "https://www.youtube.com/watch?v=vid_2");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    assert_eq!(app.queue.cursor, 0);
+
+    // Open modal
+    app.open_modal();
+    assert!(app.modal.is_open);
+    assert_eq!(app.modal.viewer_cursor, 0);
+
+    // Navigate to vid_2 (cursor index 2)
+    app.handle_modal_action(ModalKeyAction::CursorDown).unwrap();
+    assert_eq!(app.modal.viewer_cursor, 1);
+    app.handle_modal_action(ModalKeyAction::CursorDown).unwrap();
+    assert_eq!(app.modal.viewer_cursor, 2);
+
+    // Commit jump with Enter
+    app.handle_modal_action(ModalKeyAction::Commit).unwrap();
+
+    // Modal is now closed and playback switched to vid_2
+    assert!(!app.modal.is_open);
+    assert_eq!(app.queue.cursor, 2);
+    assert_eq!(app.queue.current_track().unwrap().id, "vid_2");
+
+    // Next track (vid_0) should be queued for prefetch
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(downloaded.lock().unwrap().contains(&"vid_0".to_string()));
+
+    responder.join().unwrap();
+}
+
+#[test]
+fn test_app_modal_jump_in_shuffled_queue() {
+    let (mut app, mut server, _) = setup_test_app();
+
+    // Toggle shuffle ON
+    app.handle_action(KeyAction::ToggleShuffle).unwrap();
+    assert!(app.queue.shuffle);
+
+    // Pick target in shuffled order
+    let target_idx = 1;
+    let expected_track_id = app.queue.tracks[app.queue.playback_order[target_idx]].id.clone();
+
+    let expected_url = format!("https://www.youtube.com/watch?v={}", expected_track_id);
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+        let mut line = String::new();
+
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "loadfile");
+        assert_eq!(val["command"][1], expected_url);
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    app.open_modal();
+    assert_eq!(app.modal.viewer_cursor, 0);
+
+    app.handle_modal_action(ModalKeyAction::CursorDown).unwrap();
+    assert_eq!(app.modal.viewer_cursor, 1);
+
+    app.handle_modal_action(ModalKeyAction::Commit).unwrap();
+    assert!(!app.modal.is_open);
+    assert_eq!(app.queue.cursor, 1);
+    assert_eq!(app.queue.current_track().unwrap().id, expected_track_id);
 
     responder.join().unwrap();
 }
