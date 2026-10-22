@@ -19,6 +19,7 @@ pub struct App {
     pub prefetcher: AudioPrefetcher,
     pub mpv: MpvController,
     pub modal: ModalState,
+    pub playback_started: bool,
 }
 
 impl App {
@@ -35,17 +36,22 @@ impl App {
             prefetcher,
             mpv,
             modal: ModalState::default(),
+            playback_started: false,
         }
     }
 
     /// Loads and plays the current track in the queue.
     /// If not cached, starts playing immediately via remote streaming URL and initiates background caching.
     /// In all cases, triggers ahead-of-time prefetching of the next track.
+    /// If playback has been initiated by listener, ensures MPV is unpaused.
     pub fn play_current(&mut self) -> Result<(), MpvError> {
         if let Some(track) = self.queue.current_track() {
             let is_cached = self.cache.is_cached(&track.id);
             let source = self.cache.resolve_source(&track.id);
             self.mpv.loadfile(source.as_str())?;
+            if self.playback_started {
+                self.mpv.unpause()?;
+            }
             if !is_cached {
                 self.prefetcher.prefetch(&track.id);
             }
@@ -57,14 +63,28 @@ impl App {
     /// Loads Track 1 in Initial Paused State (`[⏸]`) without auto-playing audio.
     /// Prefetches upcoming tracks and prepares status bar.
     pub fn load_initial(&mut self) -> Result<(), MpvError> {
+        self.playback_started = false;
         self.mpv.pause()?;
         self.play_current()?;
         Ok(())
     }
 
     /// Seeks relatively within the currently playing track by `offset_seconds`.
+    /// Ignores rewind commands when already at `00:00` to prevent stutter noise.
+    /// Clamps or ignores EOF errors on forward seeking without crashing.
     pub fn seek(&mut self, offset_seconds: f64) -> Result<(), MpvError> {
-        self.mpv.seek(offset_seconds)
+        if offset_seconds < 0.0 {
+            if let Ok(Some(pos)) = self.mpv.get_position() {
+                if pos <= 0.05 {
+                    return Ok(());
+                }
+            }
+        }
+        match self.mpv.seek(offset_seconds) {
+            Ok(()) => Ok(()),
+            Err(MpvError::IpcError(ref _e)) if offset_seconds > 0.0 => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     /// Handles user key actions, modifying playback or queue state accordingly.
@@ -72,6 +92,7 @@ impl App {
     pub fn handle_action(&mut self, action: KeyAction) -> Result<bool, MpvError> {
         match action {
             KeyAction::TogglePause => {
+                self.playback_started = true;
                 self.mpv.toggle_pause()?;
             }
             KeyAction::NextTrack => {
@@ -85,10 +106,10 @@ impl App {
                 }
             }
             KeyAction::SeekForward => {
-                self.seek(5.0)?;
+                let _ = self.seek(5.0);
             }
             KeyAction::SeekBackward => {
-                self.seek(-5.0)?;
+                let _ = self.seek(-5.0);
             }
             KeyAction::ToggleShuffle => {
                 self.queue.toggle_shuffle();
@@ -160,6 +181,7 @@ impl App {
                 self.modal.clear_selection();
             }
             ModalKeyAction::Commit => {
+                self.playback_started = true;
                 if !self.modal.selection_set.is_empty() {
                     let selections = self.modal.selection_set.clone();
                     self.close_modal();

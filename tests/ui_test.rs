@@ -25,7 +25,7 @@ fn test_format_line1_playing_and_cached() {
     let line = format_line1(false, "Bohemian Rhapsody", Some(65.0), Some(354.0), true);
     assert_eq!(
         line,
-        "[▶] Bohemian Rhapsody (01:05 / 05:54)  [⚡ Cached]"
+        "[⏸] Bohemian Rhapsody (01:05 / 05:54)  [⚡ Cached]"
     );
 }
 
@@ -34,7 +34,7 @@ fn test_format_line1_paused_and_streaming() {
     let line = format_line1(true, "Starman", None, Some(250.0), false);
     assert_eq!(
         line,
-        "[⏸] Starman (--:-- / 04:10)  [🌐 Stream]"
+        "[▶] Starman (--:-- / 04:10)  [🌐 Stream]"
     );
 }
 
@@ -43,7 +43,7 @@ fn test_format_line1_no_duration() {
     let line = format_line1(false, "Live Stream Track", Some(12.0), None, false);
     assert_eq!(
         line,
-        "[▶] Live Stream Track (00:12 / --:--)  [🌐 Stream]"
+        "[⏸] Live Stream Track (00:12 / --:--)  [🌐 Stream]"
     );
 }
 
@@ -86,10 +86,10 @@ fn test_status_state_helper() {
         single_loop: false,
         next_title: Some("Track B"),
     };
-    assert_eq!(state.format_line1(), "[▶] Track A (00:30 / 03:00)  [⚡ Cached]");
+    assert_eq!(state.format_line1(), "[⏸] Track A (00:30 / 03:00)  [⚡ Cached]");
     assert_eq!(state.format_line2(), "[Shuffle: ON] [Loop: OFF]  Next: Track B");
     let (l1, l2) = state.format_lines();
-    assert_eq!(l1, "[▶] Track A (00:30 / 03:00)  [⚡ Cached]");
+    assert_eq!(l1, "[⏸] Track A (00:30 / 03:00)  [⚡ Cached]");
     assert_eq!(l2, "[Shuffle: ON] [Loop: OFF]  Next: Track B");
 }
 
@@ -117,7 +117,7 @@ fn test_render_status_bar_and_wipe_ansi() {
     let mut state_buf = Vec::new();
     render_status_bar(&mut state_buf, &state).unwrap();
     let state_rendered = String::from_utf8(state_buf).unwrap();
-    assert!(state_rendered.contains("[▶] Track 1 (00:10 / 01:00)  [🌐 Stream]"));
+    assert!(state_rendered.contains("[⏸] Track 1 (00:10 / 01:00)  [🌐 Stream]"));
     assert!(state_rendered.contains("[Shuffle: OFF] [Loop: OFF]  Next: None"));
 
     let mut wipe_buf = Vec::new();

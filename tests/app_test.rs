@@ -281,7 +281,7 @@ fn test_app_render_status_output() {
     app.render_status(&mut buf).unwrap();
     let rendered = String::from_utf8(buf).unwrap();
 
-    assert!(rendered.contains("[▶] Track Zero (00:45 / 03:30)"));
+    assert!(rendered.contains("[⏸] Track Zero (00:45 / 03:30)"));
     assert!(rendered.contains("[Shuffle: OFF] [Loop: OFF]  Next: Track One"));
 
     responder.join().unwrap();
@@ -511,13 +511,13 @@ fn test_app_initial_paused_startup() {
 
     let state = app.current_status_state();
     assert!(state.is_paused, "App should start in paused state");
-    assert!(state.format_line1().starts_with("[⏸]"), "Status icon should be [⏸]");
+    assert!(state.format_line1().starts_with("[▶]"), "Status icon should be [▶]");
 
     // Press Space to start playback
     app.handle_action(KeyAction::TogglePause).unwrap();
     let state = app.current_status_state();
     assert!(!state.is_paused, "App should unpause after Space");
-    assert!(state.format_line1().starts_with("[▶]"), "Status icon should be [▶]");
+    assert!(state.format_line1().starts_with("[⏸]"), "Status icon should be [⏸]");
 
     responder.join().unwrap();
 }
@@ -562,7 +562,19 @@ fn test_app_seek_ipc_commands_and_clamping() {
         server.write_all(format!(r#"{{"request_id":{},"error":"success","data":200.0}}"#, req_id).as_bytes()).unwrap();
         server.write_all(b"\n").unwrap();
 
-        // 2. SeekBackward (-5s relative): ["seek", "-5", "relative"]
+        // 2. SeekBackward checks position before seeking: get_property time-pos
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "get_property");
+        assert_eq!(val["command"][1], "time-pos");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":25.0}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // 3. Since position was 25.0 (> 0.0), it sends relative seek: ["seek", "-5", "relative"]
         line.clear();
         reader.read_line(&mut line).unwrap();
         let val: serde_json::Value = serde_json::from_str(&line).unwrap();
@@ -705,7 +717,7 @@ fn test_app_status_line1_immediate_update_on_seek() {
     let rendered = String::from_utf8(buf).unwrap();
 
     assert!(
-        rendered.contains("[▶] Track Zero (00:45 / 03:00)"),
+        rendered.contains("[⏸] Track Zero (00:45 / 03:00)"),
         "Status should render immediately with new seeked position"
     );
 
@@ -751,6 +763,19 @@ fn test_app_modal_navigation_and_track_jump() {
         let val: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(val["command"][0], "loadfile");
         assert_eq!(val["command"][1], "https://www.youtube.com/watch?v=vid_2");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // Auto-run continuity: unpause on playback start
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "set_property");
+        assert_eq!(val["command"][1], "pause");
+        assert_eq!(val["command"][2], false);
         let req_id = val["request_id"].as_u64().unwrap();
         server
             .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
@@ -808,6 +833,19 @@ fn test_app_modal_jump_in_shuffled_queue() {
         let val: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(val["command"][0], "loadfile");
         assert_eq!(val["command"][1], expected_url);
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // Auto-run continuity: unpause on playback start
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "set_property");
+        assert_eq!(val["command"][1], "pause");
+        assert_eq!(val["command"][2], false);
         let req_id = val["request_id"].as_u64().unwrap();
         server
             .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
@@ -888,6 +926,19 @@ fn test_app_modal_search_flow_live_filtering_navigation_and_resolution() {
         let val: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(val["command"][0], "loadfile");
         assert!(val["command"][1].as_str().unwrap().contains("vid_1"));
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // Auto-run continuity: unpause on playback start
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "set_property");
+        assert_eq!(val["command"][1], "pause");
+        assert_eq!(val["command"][2], false);
         let req_id = val["request_id"].as_u64().unwrap();
         server
             .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
@@ -1019,6 +1070,19 @@ fn test_app_modal_commit_with_selections_rebuilds_queue_and_plays() {
             .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
             .unwrap();
         server.write_all(b"\n").unwrap();
+
+        // Auto-run continuity: unpause on playback start
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "set_property");
+        assert_eq!(val["command"][1], "pause");
+        assert_eq!(val["command"][2], false);
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
     });
 
     app.open_modal();
@@ -1038,8 +1102,8 @@ fn test_app_modal_commit_with_selections_rebuilds_queue_and_plays() {
     // 1. Modal closed
     assert!(!app.modal.is_open);
 
-    // 2. Queue reconstructed: selected [2, 0] first, remaining [1] after -> [2, 0, 1]
-    assert_eq!(app.queue.playback_order, vec![2, 0, 1]);
+    // 2. Queue isolated to selected subset: [2, 0]
+    assert_eq!(app.queue.playback_order, vec![2, 0]);
     assert_eq!(app.queue.cursor, 0);
     assert_eq!(app.queue.current_track().unwrap().id, "vid_2");
 
@@ -1065,6 +1129,19 @@ fn test_app_modal_commit_empty_selection_preserves_single_jump() {
         let val: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(val["command"][0], "loadfile");
         assert_eq!(val["command"][1], "https://www.youtube.com/watch?v=vid_1");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // Auto-run continuity: unpause on playback start
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "set_property");
+        assert_eq!(val["command"][1], "pause");
+        assert_eq!(val["command"][2], false);
         let req_id = val["request_id"].as_u64().unwrap();
         server
             .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())

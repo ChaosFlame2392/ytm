@@ -104,9 +104,10 @@ impl Queue {
         }
     }
 
-    /// Reconstructs `playback_order` such that the tracks at `selected_indices` appear
-    /// at the front of the queue in the exact order they were selected (pick order),
-    /// followed by the remaining unselected tracks in their relative order.
+    /// Reconstructs `playback_order` to contain ONLY the tracks at `selected_indices` in the
+    /// exact order they were selected (pick order), forming an active isolated queue.
+    /// Looping and shuffling remain restricted to this subset until `reset_to_top()` (`r`).
+    /// If `selected_indices` is empty or all indices are out-of-bounds, preserves current tracks.
     /// Resets `cursor` to 0 and returns the first track.
     pub fn reorder_with_selection(&mut self, selected_indices: &[usize]) -> Option<&Track> {
         if self.playback_order.is_empty() {
@@ -114,8 +115,13 @@ impl Queue {
             return None;
         }
 
+        if selected_indices.is_empty() {
+            self.cursor = 0;
+            return self.current_track();
+        }
+
         let n = self.playback_order.len();
-        let mut new_order = Vec::with_capacity(n);
+        let mut new_order = Vec::with_capacity(selected_indices.len());
         let mut selected_mask = vec![false; n];
 
         for &idx in selected_indices {
@@ -125,12 +131,10 @@ impl Queue {
             }
         }
 
-        for (idx, &selected) in selected_mask.iter().enumerate() {
-            if !selected {
-                new_order.push(self.playback_order[idx]);
-            }
+        if new_order.is_empty() {
+            self.cursor = 0;
+            return self.current_track();
         }
-
 
         self.playback_order = new_order;
         self.cursor = 0;

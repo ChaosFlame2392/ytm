@@ -1,6 +1,6 @@
 # Issue 07: Post-Launch Terminal Display, Seeking Stability & Queue Subsetting
 
-**Labels:** `ready-for-agent`
+**Labels:** `completed`
 
 ## Problem Statement
 
@@ -36,12 +36,12 @@ During real-world dogfooding of `ytm` v0.1.0 with diverse YouTube Music playlist
 
 ## Acceptance Criteria
 
-- [ ] Add `unicode-width` crate and update `truncate_to_width` and `format_modal_row` to compute and truncate based on actual terminal column display width (`UnicodeWidthStr::width`).
-- [ ] Ensure status bar lines never exceed terminal column width even with mixed CJK/ASCII/emojis.
-- [ ] Seeking forward past duration clamps cleanly to track end or transitions to next queue track without erroring or crashing.
-- [ ] Seeking backward when position is already `00:00` ignores redundant seek commands to prevent audio stutter noise.
-- [ ] In `parse_modal_search_key_event`, support `^H` (`Ctrl+h`), `\x08`, and `\x7f` as `SearchBackspace`.
-- [ ] Ensure `play_current()` unpauses MPV once initial playback has been triggered.
-- [ ] Flip the status bar icon: display `[▶]` when paused, `[⏸]` when playing.
-- [ ] Support isolated queue loop and shuffle for selected tracks until iceberg reset (`r`).
-- [ ] Route prefetch background errors away from stdout/stderr when terminal raw mode is active.
+- [x] Add `unicode-width` crate and update `truncate_to_width` and `format_modal_row` to compute and truncate based on actual terminal column display width (`UnicodeWidthStr::width`).
+- [x] Ensure status bar lines never exceed terminal column width even with mixed CJK/ASCII/emojis.
+- [x] Seeking forward past duration clamps cleanly to track end or transitions to next queue track without erroring or crashing.
+- [x] Seeking backward when position is already `00:00` ignores redundant seek commands to prevent audio stutter noise.
+- [x] In `parse_modal_search_key_event`, support `^H` (`Ctrl+h`), `\x08`, and `\x7f` as `SearchBackspace`.
+- [x] Ensure `play_current()` unpauses MPV once initial playback has been triggered.
+- [x] Flip the status bar icon: display `[▶]` when paused, `[⏸]` when playing.
+- [x] Support isolated queue loop and shuffle for selected tracks until iceberg reset (`r`).
+- [x] Route prefetch background errors away from stdout/stderr when terminal raw mode is active.

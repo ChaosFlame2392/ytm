@@ -223,14 +223,27 @@ fn test_queue_reorder_with_selection_pick_order_and_remaining() {
     assert_eq!(queue.playback_order, vec![0, 1, 2, 3, 4]);
 
     // Pick indices: [3, 1, 4]
-    // Tracks at these indices are track 3, track 1, track 4.
-    // Remaining unselected tracks in relative order: track 0, track 2.
+    // Forms an active isolated queue containing only tracks 3, 1, and 4
     let first = queue.reorder_with_selection(&[3, 1, 4]).expect("returns first track");
     assert_eq!(first.id, "id_003");
     assert_eq!(queue.cursor, 0);
-    assert_eq!(queue.playback_order, vec![3, 1, 4, 0, 2]);
+    assert_eq!(queue.playback_order, vec![3, 1, 4]);
     assert_eq!(queue.current_track().unwrap().id, "id_003");
     assert_eq!(queue.peek_next().unwrap().id, "id_001");
+
+    // Advancing loops strictly within the subset
+    queue.next();
+    assert_eq!(queue.current_track().unwrap().id, "id_001");
+    queue.next();
+    assert_eq!(queue.current_track().unwrap().id, "id_004");
+    queue.next();
+    assert_eq!(queue.current_track().unwrap().id, "id_003"); // Loops back to start of subset
+
+    // Iceberg reset (`r`) restores full playlist
+    queue.reset_to_top();
+    assert_eq!(queue.playback_order, vec![0, 1, 2, 3, 4]);
+    assert_eq!(queue.cursor, 0);
+    assert_eq!(queue.current_track().unwrap().id, "id_000");
 }
 
 #[test]
@@ -242,12 +255,11 @@ fn test_queue_reorder_with_selection_shuffled_state() {
 
     // Selected indices in the active playback order: [3, 1]
     // Index 3 is track 3. Index 1 is track 2.
-    // Remaining unselected indices: 0 (track 4), 2 (track 0), 4 (track 1).
-    // Expected new playback order: [3, 2, 4, 0, 1].
+    // Expected new isolated playback order: [3, 2].
     let first = queue.reorder_with_selection(&[3, 1]).expect("returns first track");
     assert_eq!(first.id, "id_003");
     assert_eq!(queue.cursor, 0);
-    assert_eq!(queue.playback_order, vec![3, 2, 4, 0, 1]);
+    assert_eq!(queue.playback_order, vec![3, 2]);
     assert_eq!(queue.peek_next().unwrap().id, "id_002");
 }
 
@@ -267,8 +279,8 @@ fn test_queue_reorder_with_selection_edge_cases() {
     let first2 = queue2.reorder_with_selection(&[2, 99, 2, 0]).expect("handles duplicates and OOB");
     assert_eq!(first2.id, "id_002");
     assert_eq!(queue2.cursor, 0);
-    // Picked: [2, 0]. Remaining: [1, 3]
-    assert_eq!(queue2.playback_order, vec![2, 0, 1, 3]);
+    // Picked: [2, 0].
+    assert_eq!(queue2.playback_order, vec![2, 0]);
 
     // 3. Empty queue returns None
     let mut empty = Queue::default();

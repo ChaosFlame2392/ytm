@@ -292,6 +292,10 @@ impl MpvIpcClient {
         Ok(())
     }
 
+    pub fn unpause(&self) -> Result<(), MpvError> {
+        self.resume()
+    }
+
     pub fn is_paused(&self) -> Result<bool, MpvError> {
         let resp = self.send_command(&["get_property", "pause"])?;
         match resp {

@@ -8,6 +8,7 @@ use crossterm::terminal::{
 use std::io::{self, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Formats playback position or duration in seconds to `MM:SS` format.
 /// Returns `"--:--"` if the value is None, NaN, or negative.
@@ -61,18 +62,28 @@ pub fn format_line2(shuffle: bool, single_loop: bool, next_title: Option<&str>) 
     .format_line2()
 }
 
-/// Truncates string to a maximum character width to prevent terminal wrapping.
-/// If truncated, appends '…' while keeping total character length <= max_width.
+/// Truncates string to a maximum terminal column display width to prevent terminal wrapping.
+/// If truncated, appends '…' while keeping total display width <= max_width.
 pub fn truncate_to_width(s: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
     }
-    if s.chars().count() > max_width {
-        let truncated: String = s.chars().take(max_width.saturating_sub(1)).collect();
-        format!("{}…", truncated)
-    } else {
-        s.to_string()
+    if UnicodeWidthStr::width(s) <= max_width {
+        return s.to_string();
     }
+    let target_width = max_width.saturating_sub(1);
+    let mut current_width = 0;
+    let mut truncated = String::new();
+    for c in s.chars() {
+        let char_width = UnicodeWidthChar::width(c).unwrap_or(0);
+        if current_width + char_width > target_width {
+            break;
+        }
+        truncated.push(c);
+        current_width += char_width;
+    }
+    truncated.push('…');
+    truncated
 }
 
 /// Represents the instantaneous playback status displayed in the terminal UI.
@@ -90,9 +101,10 @@ pub struct StatusState<'a> {
 
 impl<'a> StatusState<'a> {
     /// Formats the first line of the in-place status bar:
-    /// `[▶]` or `[⏸]`, track title, position / duration formatted as `MM:SS`, and `[⚡ Cached]` vs `[🌐 Stream]`.
+    /// `[▶]` when paused (action to play), `[⏸]` when playing (action to pause),
+    /// track title, position / duration formatted as `MM:SS`, and `[⚡ Cached]` vs `[🌐 Stream]`.
     pub fn format_line1(&self) -> String {
-        let icon = if self.is_paused { "[⏸]" } else { "[▶]" };
+        let icon = if self.is_paused { "[▶]" } else { "[⏸]" };
         let time_str = format!("({} / {})", format_time(self.position), format_time(self.duration));
         let badge = if self.is_cached {
             "[⚡ Cached]"
@@ -249,6 +261,7 @@ pub fn parse_modal_search_key_event(event: KeyEvent) -> Option<ModalKeyAction> {
             KeyCode::Char('c') | KeyCode::Char('C') => return Some(ModalKeyAction::Quit),
             KeyCode::Char('j') | KeyCode::Char('J') => return Some(ModalKeyAction::CursorDown),
             KeyCode::Char('k') | KeyCode::Char('K') => return Some(ModalKeyAction::CursorUp),
+            KeyCode::Char('h') | KeyCode::Char('H') => return Some(ModalKeyAction::SearchBackspace),
             _ => return None,
         }
     }
@@ -258,7 +271,9 @@ pub fn parse_modal_search_key_event(event: KeyEvent) -> Option<ModalKeyAction> {
         KeyCode::Up => Some(ModalKeyAction::CursorUp),
         KeyCode::Enter => Some(ModalKeyAction::SearchResolve),
         KeyCode::Esc => Some(ModalKeyAction::SearchAbort),
-        KeyCode::Backspace => Some(ModalKeyAction::SearchBackspace),
+        KeyCode::Backspace | KeyCode::Char('\x08') | KeyCode::Char('\x7f') => {
+            Some(ModalKeyAction::SearchBackspace)
+        }
         KeyCode::Char(c) => Some(ModalKeyAction::SearchChar(c)),
         _ => None,
     }
@@ -595,13 +610,13 @@ pub fn format_modal_row(
     let num_str = format!("{:>3}. ", index + 1);
     let cache_badge = if is_cached { "[⚡] " } else { "" };
     let prefix = format!(" {}{}{}{}", active_marker, select_marker, num_str, cache_badge);
-    let prefix_len = prefix.chars().count();
+    let prefix_len = UnicodeWidthStr::width(prefix.as_str());
 
-    let avail_title_len = content_width.saturating_sub(prefix_len + 1);
+    let avail_title_len = content_width.saturating_sub(prefix_len);
     let title = truncate_to_width(title, avail_title_len);
 
     let mut row_content = format!("{}{}", prefix, title);
-    let content_chars = row_content.chars().count();
+    let content_chars = UnicodeWidthStr::width(row_content.as_str());
     if content_chars < content_width {
         row_content.push_str(&" ".repeat(content_width - content_chars));
     }
@@ -646,10 +661,11 @@ pub fn format_modal_lines(
         "╭╮".to_string()
     } else {
         let inner_width = width - 2;
-        if header_text.chars().count() + 2 <= inner_width {
+        let header_width = UnicodeWidthStr::width(header_text.as_str());
+        if header_width + 2 <= inner_width {
             let mut s = String::from("╭─");
             s.push_str(&header_text);
-            let used = 1 + header_text.chars().count();
+            let used = 1 + header_width;
             let remaining = inner_width.saturating_sub(used);
             s.push_str(&"─".repeat(remaining));
             s.push('╮');
@@ -667,7 +683,8 @@ pub fn format_modal_lines(
     if modal.search_active {
         if content_height > 0 {
             let prompt = format!(" Search: {}", modal.search_query);
-            let prompt_chars = prompt.chars().count();
+            let prompt = truncate_to_width(&prompt, content_width);
+            let prompt_chars = UnicodeWidthStr::width(prompt.as_str());
             let padding = content_width.saturating_sub(prompt_chars);
             lines.push(format!("│{}{}│", prompt, " ".repeat(padding)));
         }
@@ -676,7 +693,7 @@ pub fn format_modal_lines(
             for row in 0..track_rows {
                 if row == 0 {
                     let msg = "  [No matching tracks]";
-                    let msg_chars = msg.chars().count();
+                    let msg_chars = UnicodeWidthStr::width(msg);
                     let padding = content_width.saturating_sub(msg_chars);
                     lines.push(format!("│{}{}│", msg, " ".repeat(padding)));
                 } else {
@@ -713,7 +730,7 @@ pub fn format_modal_lines(
         for row in 0..content_height {
             if row == 0 {
                 let msg = "  (Queue is empty)";
-                let msg_chars = msg.chars().count();
+                let msg_chars = UnicodeWidthStr::width(msg);
                 let padding = content_width.saturating_sub(msg_chars);
                 lines.push(format!("│{}{}│", msg, " ".repeat(padding)));
             } else {
@@ -763,18 +780,20 @@ pub fn format_modal_lines(
         "╰╯".to_string()
     } else {
         let inner_width = width - 2;
-        if footer_text.chars().count() + 2 <= inner_width {
+        let footer_width = UnicodeWidthStr::width(footer_text);
+        let short_footer_width = UnicodeWidthStr::width(short_footer);
+        if footer_width + 2 <= inner_width {
             let mut s = String::from("╰─");
             s.push_str(footer_text);
-            let used = 1 + footer_text.chars().count();
+            let used = 1 + footer_width;
             let remaining = inner_width.saturating_sub(used);
             s.push_str(&"─".repeat(remaining));
             s.push('╯');
             s
-        } else if short_footer.chars().count() + 2 <= inner_width {
+        } else if short_footer_width + 2 <= inner_width {
             let mut s = String::from("╰─");
             s.push_str(short_footer);
-            let used = 1 + short_footer.chars().count();
+            let used = 1 + short_footer_width;
             let remaining = inner_width.saturating_sub(used);
             s.push_str(&"─".repeat(remaining));
             s.push('╯');
