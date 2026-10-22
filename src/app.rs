@@ -51,6 +51,19 @@ impl App {
         Ok(())
     }
 
+    /// Loads Track 1 in Initial Paused State (`[⏸]`) without auto-playing audio.
+    /// Prefetches upcoming tracks and prepares status bar.
+    pub fn load_initial(&mut self) -> Result<(), MpvError> {
+        self.mpv.pause()?;
+        self.play_current()?;
+        Ok(())
+    }
+
+    /// Seeks relatively within the currently playing track by `offset_seconds`.
+    pub fn seek(&mut self, offset_seconds: f64) -> Result<(), MpvError> {
+        self.mpv.seek(offset_seconds)
+    }
+
     /// Handles user key actions, modifying playback or queue state accordingly.
     /// Returns `Ok(false)` if the application should terminate.
     pub fn handle_action(&mut self, action: KeyAction) -> Result<bool, MpvError> {
@@ -67,6 +80,12 @@ impl App {
                 if self.queue.prev().is_some() {
                     self.play_current()?;
                 }
+            }
+            KeyAction::SeekForward => {
+                self.seek(5.0)?;
+            }
+            KeyAction::SeekBackward => {
+                self.seek(-5.0)?;
             }
             KeyAction::ToggleShuffle => {
                 self.queue.toggle_shuffle();
@@ -102,8 +121,8 @@ impl App {
     /// Builds instantaneous status snapshot from MPV and queue state.
     pub fn current_status_state(&self) -> StatusState<'_> {
         let is_paused = self.mpv.is_paused().unwrap_or(false);
-        let position = self.mpv.get_position().unwrap_or(None);
-        let duration = self.mpv.get_duration().unwrap_or(None);
+        let position = self.mpv.get_position().unwrap_or(None).map(|p| p.max(0.0));
+        let duration = self.mpv.get_duration().unwrap_or(None).map(|d| d.max(0.0));
         let current_track = self.queue.current_track();
         let title = current_track
             .map(|t| t.title.as_str())
@@ -138,7 +157,7 @@ impl App {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut guard = TerminalGuard::enter()?;
 
-        let _ = self.play_current();
+        let _ = self.load_initial();
 
         let mut stdout = io::stdout();
         let tick_rate = Duration::from_millis(250);
@@ -161,11 +180,15 @@ impl App {
                         if !keep_running {
                             break;
                         }
+                        while let Some(ev) = self.mpv.poll_event() {
+                            let _ = self.handle_mpv_event(ev);
+                        }
                         let _ = self.render_status(&mut stdout);
                     }
                 }
             }
         }
+
 
         guard.leave();
         let _ = self.mpv.quit();

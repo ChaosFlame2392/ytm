@@ -4,14 +4,15 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] `ytm` clears the terminal screen upon launch (`Clear(ClearType::All)`).
-- [ ] Track 1 loads in paused mode (`[⏸]`) without auto-playing audio until `Space` is pressed.
-- [ ] `h` and `Left` arrow keys seek backward by 5 seconds relative to the current position.
-- [ ] `l` and `Right` arrow keys seek forward by 5 seconds relative to the current position.
-- [ ] Backward seeking before `00:00` clamps cleanly to `00:00`.
-- [ ] Forward seeking beyond track duration triggers track completion and transitions to the next queue track.
-- [ ] Line 1 of the status bar updates immediately with the new seek position without waiting for the 250ms tick.
-- [ ] `<` and `>` (as well as `,` and `.`) continue to function strictly for previous/next track skips.
-- [ ] Integration tests in `tests/app_test.rs` verify startup paused state, seek IPC commands, and boundary clamping.
+- [x] `ytm` clears the terminal screen upon launch (`Clear(ClearType::All)`).
+- [x] Track 1 loads in paused mode (`[⏸]`) without auto-playing audio until `Space` is pressed.
+- [x] `h` and `Left` arrow keys seek backward by 5 seconds relative to the current position.
+- [x] `l` and `Right` arrow keys seek forward by 5 seconds relative to the current position.
+- [x] Backward seeking before `00:00` clamps cleanly to `00:00`.
+- [x] Forward seeking beyond track duration triggers track completion and transitions to the next queue track.
+- [x] Line 1 of the status bar updates immediately with the new seek position without waiting for the 250ms tick.
+- [x] `<` and `>` (as well as `,` and `.`) continue to function strictly for previous/next track skips.
+- [x] Integration tests in `tests/app_test.rs` verify startup paused state, seek IPC commands, and boundary clamping.
+

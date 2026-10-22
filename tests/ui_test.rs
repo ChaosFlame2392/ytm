@@ -143,7 +143,7 @@ fn test_parse_key_event_bindings() {
         Some(KeyAction::TogglePause)
     );
 
-    // Next track: >, ., Right
+    // Next track: >, .
     assert_eq!(
         parse_key_event(make_key_event(KeyCode::Char('>'), KeyModifiers::empty())),
         Some(KeyAction::NextTrack)
@@ -152,12 +152,8 @@ fn test_parse_key_event_bindings() {
         parse_key_event(make_key_event(KeyCode::Char('.'), KeyModifiers::empty())),
         Some(KeyAction::NextTrack)
     );
-    assert_eq!(
-        parse_key_event(make_key_event(KeyCode::Right, KeyModifiers::empty())),
-        Some(KeyAction::NextTrack)
-    );
 
-    // Prev track: <, ,, Left
+    // Prev track: <, ,
     assert_eq!(
         parse_key_event(make_key_event(KeyCode::Char('<'), KeyModifiers::empty())),
         Some(KeyAction::PreviousTrack)
@@ -166,9 +162,33 @@ fn test_parse_key_event_bindings() {
         parse_key_event(make_key_event(KeyCode::Char(','), KeyModifiers::empty())),
         Some(KeyAction::PreviousTrack)
     );
+
+    // Seek backward: h, H, Left
+    assert_eq!(
+        parse_key_event(make_key_event(KeyCode::Char('h'), KeyModifiers::empty())),
+        Some(KeyAction::SeekBackward)
+    );
+    assert_eq!(
+        parse_key_event(make_key_event(KeyCode::Char('H'), KeyModifiers::empty())),
+        Some(KeyAction::SeekBackward)
+    );
     assert_eq!(
         parse_key_event(make_key_event(KeyCode::Left, KeyModifiers::empty())),
-        Some(KeyAction::PreviousTrack)
+        Some(KeyAction::SeekBackward)
+    );
+
+    // Seek forward: l, L, Right
+    assert_eq!(
+        parse_key_event(make_key_event(KeyCode::Char('l'), KeyModifiers::empty())),
+        Some(KeyAction::SeekForward)
+    );
+    assert_eq!(
+        parse_key_event(make_key_event(KeyCode::Char('L'), KeyModifiers::empty())),
+        Some(KeyAction::SeekForward)
+    );
+    assert_eq!(
+        parse_key_event(make_key_event(KeyCode::Right, KeyModifiers::empty())),
+        Some(KeyAction::SeekForward)
     );
 
     // Shuffle: s, S
@@ -189,16 +209,6 @@ fn test_parse_key_event_bindings() {
     assert_eq!(
         parse_key_event(make_key_event(KeyCode::Char('R'), KeyModifiers::empty())),
         Some(KeyAction::ResetToTop)
-    );
-
-    // Single loop: l, L
-    assert_eq!(
-        parse_key_event(make_key_event(KeyCode::Char('l'), KeyModifiers::empty())),
-        Some(KeyAction::ToggleLoop)
-    );
-    assert_eq!(
-        parse_key_event(make_key_event(KeyCode::Char('L'), KeyModifiers::empty())),
-        Some(KeyAction::ToggleLoop)
     );
 
     // Quit: q, Q, Ctrl+C
@@ -261,4 +271,18 @@ fn test_terminal_guard_leave_and_wipe() {
     ytm::ui::wipe_status_lines(&mut wipe_buf).unwrap();
     assert_eq!(wipe_buf, b"\r\x1b[2K\n\r\x1b[2K\x1b[1A\r");
 }
+
+#[test]
+fn test_terminal_guard_init_screen_clear_and_cursor() {
+    let mut buf = Vec::new();
+    ytm::ui::init_screen(&mut buf).unwrap();
+    let rendered = String::from_utf8(buf).unwrap();
+    assert!(rendered.contains("\x1b[2J"), "Should clear entire screen");
+    assert!(
+        rendered.contains("\x1b[1;1H") || rendered.contains("\x1b[H"),
+        "Should reposition cursor to (0, 0)"
+    );
+    assert!(rendered.contains("\x1b[?25l"), "Should hide cursor");
+}
+
 

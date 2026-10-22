@@ -1,7 +1,7 @@
-use crossterm::cursor::{Hide, Show};
+use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
 use std::io::{self, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -154,6 +154,8 @@ pub enum KeyAction {
     TogglePause,
     NextTrack,
     PreviousTrack,
+    SeekForward,
+    SeekBackward,
     ToggleShuffle,
     ResetToTop,
     ToggleLoop,
@@ -175,14 +177,20 @@ pub fn parse_key_event(event: KeyEvent) -> Option<KeyAction> {
 
     match event.code {
         KeyCode::Char(' ') => Some(KeyAction::TogglePause),
-        KeyCode::Char('>') | KeyCode::Char('.') | KeyCode::Right => Some(KeyAction::NextTrack),
-        KeyCode::Char('<') | KeyCode::Char(',') | KeyCode::Left => Some(KeyAction::PreviousTrack),
+        KeyCode::Char('>') | KeyCode::Char('.') => Some(KeyAction::NextTrack),
+        KeyCode::Char('<') | KeyCode::Char(',') => Some(KeyAction::PreviousTrack),
+        KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Left => Some(KeyAction::SeekBackward),
+        KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Right => Some(KeyAction::SeekForward),
         KeyCode::Char('s') | KeyCode::Char('S') => Some(KeyAction::ToggleShuffle),
         KeyCode::Char('r') | KeyCode::Char('R') => Some(KeyAction::ResetToTop),
-        KeyCode::Char('l') | KeyCode::Char('L') => Some(KeyAction::ToggleLoop),
         KeyCode::Char('q') | KeyCode::Char('Q') => Some(KeyAction::Quit),
         _ => None,
     }
+}
+
+/// Clears the terminal screen, repositions cursor to top-left (0, 0), and hides cursor.
+pub fn init_screen<W: Write>(writer: &mut W) -> io::Result<()> {
+    execute!(writer, Clear(ClearType::All), MoveTo(0, 0), Hide)
 }
 
 /// RAII Terminal cleanup guard. Ensures raw mode is disabled and cursor is restored
@@ -192,11 +200,12 @@ pub struct TerminalGuard {
 }
 
 impl TerminalGuard {
-    /// Enables raw mode, hides cursor, and installs a panic hook to guarantee terminal cleanup.
+    /// Enables raw mode, clears screen, moves cursor to top-left, hides cursor,
+    /// and installs a panic hook to guarantee terminal cleanup.
     pub fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        if let Err(e) = execute!(stdout, Hide) {
+        if let Err(e) = init_screen(&mut stdout) {
             let _ = disable_raw_mode();
             return Err(e);
         }

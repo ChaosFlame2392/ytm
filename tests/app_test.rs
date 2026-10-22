@@ -397,3 +397,318 @@ fn test_app_initialization_prunes_cache() {
     assert!(!old_file.exists(), "Cache should be pruned on App initialization");
 }
 
+#[test]
+fn test_app_initial_paused_startup() {
+    let (mut app, mut server, _downloaded) = setup_test_app();
+
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+        let mut line = String::new();
+
+        // 1. Initial pause command: set_property pause true
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "set_property");
+        assert_eq!(val["command"][1], "pause");
+        assert_eq!(val["command"][2], true);
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // 2. Initial loadfile for track 0 (vid_0)
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "loadfile");
+        assert_eq!(val["command"][1], "https://www.youtube.com/watch?v=vid_0");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // 3. Status query: get_property pause
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "get_property");
+        assert_eq!(val["command"][1], "pause");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":true}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // 4. Status query: get_property time-pos (property unavailable during pause at start)
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"property unavailable"}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // 5. Status query: get_property duration
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":240.0}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // 6. User presses Space (TogglePause): cycle pause
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "cycle");
+        assert_eq!(val["command"][1], "pause");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // 7. Status query: get_property pause after unpause
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":false}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // 8. Status query: get_property time-pos
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":0.0}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // 9. Status query: get_property duration
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":240.0}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    app.load_initial().unwrap();
+    assert_eq!(app.queue.cursor, 0);
+
+    let state = app.current_status_state();
+    assert!(state.is_paused, "App should start in paused state");
+    assert!(state.format_line1().starts_with("[⏸]"), "Status icon should be [⏸]");
+
+    // Press Space to start playback
+    app.handle_action(KeyAction::TogglePause).unwrap();
+    let state = app.current_status_state();
+    assert!(!state.is_paused, "App should unpause after Space");
+    assert!(state.format_line1().starts_with("[▶]"), "Status icon should be [▶]");
+
+    responder.join().unwrap();
+}
+
+#[test]
+fn test_app_seek_ipc_commands_and_clamping() {
+    let (mut app, mut server, _downloaded) = setup_test_app();
+
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+        let mut line = String::new();
+
+        // 1. SeekForward (+5s relative): ["seek", "5", "relative"]
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "seek");
+        assert_eq!(val["command"][1], "5");
+        assert_eq!(val["command"][2], "relative");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // Status queries for render
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let req_id = serde_json::from_str::<serde_json::Value>(&line).unwrap()["request_id"].as_u64().unwrap();
+        server.write_all(format!(r#"{{"request_id":{},"error":"success","data":false}}"#, req_id).as_bytes()).unwrap();
+        server.write_all(b"\n").unwrap();
+
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let req_id = serde_json::from_str::<serde_json::Value>(&line).unwrap()["request_id"].as_u64().unwrap();
+        server.write_all(format!(r#"{{"request_id":{},"error":"success","data":25.0}}"#, req_id).as_bytes()).unwrap();
+        server.write_all(b"\n").unwrap();
+
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let req_id = serde_json::from_str::<serde_json::Value>(&line).unwrap()["request_id"].as_u64().unwrap();
+        server.write_all(format!(r#"{{"request_id":{},"error":"success","data":200.0}}"#, req_id).as_bytes()).unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // 2. SeekBackward (-5s relative): ["seek", "-5", "relative"]
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "seek");
+        assert_eq!(val["command"][1], "-5");
+        assert_eq!(val["command"][2], "relative");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // Status queries for render with position clamped at 0.0
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let req_id = serde_json::from_str::<serde_json::Value>(&line).unwrap()["request_id"].as_u64().unwrap();
+        server.write_all(format!(r#"{{"request_id":{},"error":"success","data":false}}"#, req_id).as_bytes()).unwrap();
+        server.write_all(b"\n").unwrap();
+
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let req_id = serde_json::from_str::<serde_json::Value>(&line).unwrap()["request_id"].as_u64().unwrap();
+        server.write_all(format!(r#"{{"request_id":{},"error":"success","data":0.0}}"#, req_id).as_bytes()).unwrap();
+        server.write_all(b"\n").unwrap();
+
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let req_id = serde_json::from_str::<serde_json::Value>(&line).unwrap()["request_id"].as_u64().unwrap();
+        server.write_all(format!(r#"{{"request_id":{},"error":"success","data":200.0}}"#, req_id).as_bytes()).unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    // 1. Forward seek
+    app.handle_action(KeyAction::SeekForward).unwrap();
+    let state = app.current_status_state();
+    assert_eq!(state.position, Some(25.0));
+    assert!(state.format_line1().contains("(00:25 / 03:20)"));
+
+    // 2. Backward seek clamps to 00:00 without skipping tracks
+    assert_eq!(app.queue.cursor, 0);
+    app.handle_action(KeyAction::SeekBackward).unwrap();
+    assert_eq!(app.queue.cursor, 0, "Seeking backward should not change queue track");
+    let state = app.current_status_state();
+    assert_eq!(state.position, Some(0.0));
+    assert!(state.format_line1().contains("(00:00 / 03:20)"));
+
+    responder.join().unwrap();
+}
+
+#[test]
+fn test_app_seek_forward_past_duration_triggers_eof_advancement() {
+    let (mut app, mut server, _downloaded) = setup_test_app();
+
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+        let mut line = String::new();
+
+        // 1. App sends seek forward +5
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "seek");
+        assert_eq!(val["command"][1], "5");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // 2. Seeking past duration causes MPV to emit EndFile(Eof) event
+        server
+            .write_all(b"{\"event\":\"end-file\",\"reason\":\"eof\"}\n")
+            .unwrap();
+
+        // 3. App handles EOF -> advances to track 1 (vid_1) -> loadfile
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "loadfile");
+        assert_eq!(val["command"][1], "https://www.youtube.com/watch?v=vid_1");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    assert_eq!(app.queue.cursor, 0);
+    app.handle_action(KeyAction::SeekForward).unwrap();
+
+    // Process MPV events received from seek past duration
+    let ev = app.mpv.recv_event().unwrap();
+    assert_eq!(ev, MpvEvent::EndFile { reason: EndFileReason::Eof });
+    app.handle_mpv_event(ev).unwrap();
+
+    assert_eq!(app.queue.cursor, 1, "Seeking past duration should advance to next queue track");
+    assert_eq!(app.queue.current_track().unwrap().id, "vid_1");
+
+    responder.join().unwrap();
+}
+
+#[test]
+fn test_app_status_line1_immediate_update_on_seek() {
+    let (mut app, mut server, _) = setup_test_app();
+
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+        let mut line = String::new();
+
+        // Seek forward
+        reader.read_line(&mut line).unwrap();
+        let req_id = serde_json::from_str::<serde_json::Value>(&line).unwrap()["request_id"].as_u64().unwrap();
+        server.write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes()).unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // Status queries immediately after seek
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let req_id = serde_json::from_str::<serde_json::Value>(&line).unwrap()["request_id"].as_u64().unwrap();
+        server.write_all(format!(r#"{{"request_id":{},"error":"success","data":false}}"#, req_id).as_bytes()).unwrap();
+        server.write_all(b"\n").unwrap();
+
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let req_id = serde_json::from_str::<serde_json::Value>(&line).unwrap()["request_id"].as_u64().unwrap();
+        server.write_all(format!(r#"{{"request_id":{},"error":"success","data":45.0}}"#, req_id).as_bytes()).unwrap();
+        server.write_all(b"\n").unwrap();
+
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let req_id = serde_json::from_str::<serde_json::Value>(&line).unwrap()["request_id"].as_u64().unwrap();
+        server.write_all(format!(r#"{{"request_id":{},"error":"success","data":180.0}}"#, req_id).as_bytes()).unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    app.handle_action(KeyAction::SeekForward).unwrap();
+    let mut buf = Vec::new();
+    app.render_status(&mut buf).unwrap();
+    let rendered = String::from_utf8(buf).unwrap();
+
+    assert!(
+        rendered.contains("[▶] Track Zero (00:45 / 03:00)"),
+        "Status should render immediately with new seeked position"
+    );
+
+    responder.join().unwrap();
+}
+
+

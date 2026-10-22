@@ -318,6 +318,17 @@ impl MpvIpcClient {
         }
     }
 
+    /// Performs relative in-track seeking by `offset_seconds`.
+    pub fn seek(&self, offset_seconds: f64) -> Result<(), MpvError> {
+        let offset_str = format!("{}", offset_seconds);
+        let resp = self.send_command(&["seek", &offset_str, "relative"])?;
+        match resp {
+            MpvResponse::Success { .. } => Ok(()),
+            MpvResponse::Error { message, .. } => Err(MpvError::IpcError(message)),
+            MpvResponse::PropertyUnavailable { .. } => Ok(()),
+        }
+    }
+
     pub fn poll_event(&self) -> Option<MpvEvent> {
         self.event_rx.lock().unwrap().try_recv().ok()
     }
@@ -409,6 +420,12 @@ impl MpvController {
     pub fn client(&self) -> &MpvIpcClient {
         &self.client
     }
+
+    /// Performs relative in-track seeking by `offset_seconds`.
+    pub fn seek(&self, offset_seconds: f64) -> Result<(), MpvError> {
+        self.client.seek(offset_seconds)
+    }
+
 
     /// Gracefully terminate mpv and wait for process exit.
     pub fn quit(&mut self) -> Result<(), MpvError> {
@@ -602,6 +619,49 @@ mod tests {
 
         server_thread.join().unwrap();
     }
+
+    #[test]
+    fn test_mpv_ipc_client_seek_command() {
+        let (client_stream, mut server_stream) = std::os::unix::net::UnixStream::pair().unwrap();
+        let client = MpvIpcClient::new(client_stream);
+
+        let server_thread = std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            let mut reader = BufReader::new(server_stream.try_clone().unwrap());
+
+            // 1. seek +5 relative
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let parsed: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(parsed["command"][0], "seek");
+            assert_eq!(parsed["command"][1], "5");
+            assert_eq!(parsed["command"][2], "relative");
+            let req_id = parsed["request_id"].as_u64().unwrap();
+            server_stream
+                .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+                .unwrap();
+            server_stream.write_all(b"\n").unwrap();
+
+            // 2. seek -5 relative
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            let parsed: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(parsed["command"][0], "seek");
+            assert_eq!(parsed["command"][1], "-5");
+            assert_eq!(parsed["command"][2], "relative");
+            let req_id = parsed["request_id"].as_u64().unwrap();
+            server_stream
+                .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+                .unwrap();
+            server_stream.write_all(b"\n").unwrap();
+        });
+
+        client.seek(5.0).unwrap();
+        client.seek(-5.0).unwrap();
+
+        server_thread.join().unwrap();
+    }
+
 
     #[test]
     fn test_mpv_controller_real_process_lifecycle() {
