@@ -17,13 +17,7 @@ pub struct PlaylistManager {
 
 impl PlaylistManager {
     pub fn default_cache_dir() -> PathBuf {
-        if let Ok(dir) = std::env::var("YTM_CACHE_DIR") {
-            PathBuf::from(dir)
-        } else if let Ok(home) = std::env::var("HOME") {
-            PathBuf::from(home).join("Library/Caches/ytm")
-        } else {
-            PathBuf::from("./cache")
-        }
+        crate::cache::default_cache_dir()
     }
 
     pub fn new(cache_dir: PathBuf) -> Self {

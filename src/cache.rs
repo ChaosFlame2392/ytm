@@ -38,6 +38,17 @@ pub struct AudioCache {
     pub target_bytes: u64,
 }
 
+/// Returns the default root cache directory, resolving YTM_CACHE_DIR, HOME, or ./cache.
+pub fn default_cache_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("YTM_CACHE_DIR") {
+        PathBuf::from(dir)
+    } else if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join("Library/Caches/ytm")
+    } else {
+        PathBuf::from("./cache")
+    }
+}
+
 impl Default for AudioCache {
     fn default() -> Self {
         Self::new(Self::default_audio_dir())
@@ -46,13 +57,7 @@ impl Default for AudioCache {
 
 impl AudioCache {
     pub fn default_audio_dir() -> PathBuf {
-        if let Ok(dir) = std::env::var("YTM_CACHE_DIR") {
-            PathBuf::from(dir).join("audio")
-        } else if let Ok(home) = std::env::var("HOME") {
-            PathBuf::from(home).join("Library/Caches/ytm/audio")
-        } else {
-            PathBuf::from("./cache/audio")
-        }
+        default_cache_dir().join("audio")
     }
 
     pub fn new(audio_dir: PathBuf) -> Self {

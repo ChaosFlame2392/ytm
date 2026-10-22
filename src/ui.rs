@@ -20,8 +20,8 @@ pub fn format_time(seconds: Option<f64>) -> String {
     }
 }
 
-/// Formats the first line of the in-place status bar:
-/// `[▶]` or `[⏸]`, track title, position / duration formatted as `MM:SS`, and `[⚡ Cached]` vs `[🌐 Stream]`.
+/// Formats the first line of the in-place status bar from discrete arguments.
+/// Kept as a convenient helper for tests.
 pub fn format_line1(
     paused: bool,
     title: &str,
@@ -29,31 +29,33 @@ pub fn format_line1(
     dur: Option<f64>,
     is_cached: bool,
 ) -> String {
-    let icon = if paused { "[⏸]" } else { "[▶]" };
-    let time_str = format!("({} / {})", format_time(pos), format_time(dur));
-    let badge = if is_cached {
-        "[⚡ Cached]"
-    } else {
-        "[🌐 Stream]"
-    };
-    format!("{} {} {}  {}", icon, title, time_str, badge)
+    StatusState {
+        is_paused: paused,
+        title,
+        position: pos,
+        duration: dur,
+        is_cached,
+        shuffle: false,
+        single_loop: false,
+        next_title: None,
+    }
+    .format_line1()
 }
 
-/// Formats the second line of the in-place status bar:
-/// `[Shuffle: ON/OFF]`, `[Loop: ON/OFF]`, and `Next: <next title>`.
+/// Formats the second line of the in-place status bar from discrete arguments.
+/// Kept as a convenient helper for tests.
 pub fn format_line2(shuffle: bool, single_loop: bool, next_title: Option<&str>) -> String {
-    let shuffle_badge = if shuffle {
-        "[Shuffle: ON]"
-    } else {
-        "[Shuffle: OFF]"
-    };
-    let loop_badge = if single_loop {
-        "[Loop: ON]"
-    } else {
-        "[Loop: OFF]"
-    };
-    let next_str = format!("Next: {}", next_title.unwrap_or("None"));
-    format!("{} {}  {}", shuffle_badge, loop_badge, next_str)
+    StatusState {
+        is_paused: false,
+        title: "",
+        position: None,
+        duration: None,
+        is_cached: false,
+        shuffle,
+        single_loop,
+        next_title,
+    }
+    .format_line2()
 }
 
 /// Truncates string to a maximum character width to prevent terminal wrapping.
@@ -84,21 +86,58 @@ pub struct StatusState<'a> {
 }
 
 impl<'a> StatusState<'a> {
+    /// Formats the first line of the in-place status bar:
+    /// `[▶]` or `[⏸]`, track title, position / duration formatted as `MM:SS`, and `[⚡ Cached]` vs `[🌐 Stream]`.
+    pub fn format_line1(&self) -> String {
+        let icon = if self.is_paused { "[⏸]" } else { "[▶]" };
+        let time_str = format!("({} / {})", format_time(self.position), format_time(self.duration));
+        let badge = if self.is_cached {
+            "[⚡ Cached]"
+        } else {
+            "[🌐 Stream]"
+        };
+        format!("{} {} {}  {}", icon, self.title, time_str, badge)
+    }
+
+    /// Formats the second line of the in-place status bar:
+    /// `[Shuffle: ON/OFF]`, `[Loop: ON/OFF]`, and `Next: <next title>`.
+    pub fn format_line2(&self) -> String {
+        let shuffle_badge = if self.shuffle {
+            "[Shuffle: ON]"
+        } else {
+            "[Shuffle: OFF]"
+        };
+        let loop_badge = if self.single_loop {
+            "[Loop: ON]"
+        } else {
+            "[Loop: OFF]"
+        };
+        let next_str = format!("Next: {}", self.next_title.unwrap_or("None"));
+        format!("{} {}  {}", shuffle_badge, loop_badge, next_str)
+    }
+
+    /// Formats both status bar lines as a pair (line1, line2).
     pub fn format_lines(&self) -> (String, String) {
-        let line1 = format_line1(
-            self.is_paused,
-            self.title,
-            self.position,
-            self.duration,
-            self.is_cached,
-        );
-        let line2 = format_line2(self.shuffle, self.single_loop, self.next_title);
-        (line1, line2)
+        (self.format_line1(), self.format_line2())
     }
 }
 
 /// Renders 2 lines strictly in place (`\r\x1b[2K`), overwriting without scrolling the terminal.
-pub fn render_status_bar<W: Write>(writer: &mut W, line1: &str, line2: &str) -> io::Result<()> {
+/// Accepts `&StatusState` directly, truncates to terminal width if available, and flushes output.
+pub fn render_status_bar<W: Write>(writer: &mut W, state: &StatusState<'_>) -> io::Result<()> {
+    let (mut l1, mut l2) = state.format_lines();
+    if let Ok((cols, _)) = crossterm::terminal::size() {
+        let width = cols as usize;
+        if width > 0 {
+            l1 = truncate_to_width(&l1, width);
+            l2 = truncate_to_width(&l2, width);
+        }
+    }
+    render_status_lines(writer, &l1, &l2)
+}
+
+/// Helper function to write raw status lines in-place without scrolling.
+pub fn render_status_lines<W: Write>(writer: &mut W, line1: &str, line2: &str) -> io::Result<()> {
     write!(writer, "\r\x1b[2K{}\n\r\x1b[2K{}\x1b[1A\r", line1, line2)?;
     writer.flush()
 }

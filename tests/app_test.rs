@@ -58,7 +58,9 @@ fn setup_test_app() -> (App, UnixStream, Arc<Mutex<Vec<String>>>) {
 }
 
 fn tempfile_dir(prefix: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("{}-{}", prefix, std::process::id()));
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), count));
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -282,5 +284,116 @@ fn test_app_render_status_output() {
     assert!(rendered.contains("[Shuffle: OFF] [Loop: OFF]  Next: Track One"));
 
     responder.join().unwrap();
+}
+
+#[test]
+fn test_app_current_track_proactive_prefetch_when_not_cached() {
+    let (mut app, mut server, downloaded) = setup_test_app();
+
+    assert!(!app.cache.is_cached("vid_0"));
+    assert!(!app.cache.is_cached("vid_1"));
+
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+        let mut line = String::new();
+
+        // play_current for vid_0 -> should load remote streaming URL
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "loadfile");
+        let path = val["command"][1].as_str().unwrap();
+        assert_eq!(path, "https://www.youtube.com/watch?v=vid_0");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    app.play_current().unwrap();
+
+    // Prefetcher should have queued both vid_0 (current track proactive cache) and vid_1 (peek_next)
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let list = downloaded.lock().unwrap().clone();
+    assert!(list.contains(&"vid_0".to_string()), "current track should be queued for prefetch");
+    assert!(list.contains(&"vid_1".to_string()), "next track should be queued for prefetch");
+
+    responder.join().unwrap();
+}
+
+#[test]
+fn test_app_single_loop_manual_skip_vs_natural_eof() {
+    let (mut app, mut server, _) = setup_test_app();
+
+    // Turn single loop ON
+    app.handle_action(KeyAction::ToggleLoop).unwrap();
+    assert!(app.queue.single_loop);
+
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+        let mut line = String::new();
+
+        // 1. Manual NextTrack -> should advance to vid_1
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "loadfile");
+        assert!(val["command"][1].as_str().unwrap().contains("vid_1"));
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // 2. EOF event -> should repeat vid_1 because single_loop is ON
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "loadfile");
+        assert!(val["command"][1].as_str().unwrap().contains("vid_1"));
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    // 1. Manual NextTrack advances cursor even though loop is ON
+    app.handle_action(KeyAction::NextTrack).unwrap();
+    assert_eq!(app.queue.cursor, 1);
+    assert_eq!(app.queue.current_track().unwrap().id, "vid_1");
+
+    // 2. EOF repeats current track
+    app.handle_mpv_event(MpvEvent::EndFile {
+        reason: EndFileReason::Eof,
+    })
+    .unwrap();
+    assert_eq!(app.queue.cursor, 1);
+    assert_eq!(app.queue.current_track().unwrap().id, "vid_1");
+
+    responder.join().unwrap();
+}
+
+#[test]
+fn test_app_initialization_prunes_cache() {
+    let (client_stream, _server_stream) = UnixStream::pair().unwrap();
+    let mpv = MpvController::from_stream(client_stream);
+
+    let temp_dir = tempfile_dir("ytm-prune-test");
+    let cache = AudioCache::with_limits(temp_dir.clone(), 100, 50);
+    cache.ensure_audio_dir().unwrap();
+
+    let old_file = cache.cache_file_path("old");
+    std::fs::write(&old_file, vec![0u8; 150]).unwrap();
+    assert!(old_file.exists());
+
+    let queue = Queue::new(vec![]);
+    let prefetcher = AudioPrefetcher::new(cache.clone());
+
+    // Creating App should trigger cache.prune_lru()
+    let _app = App::new(queue, cache, prefetcher, mpv);
+
+    assert!(!old_file.exists(), "Cache should be pruned on App initialization");
 }
 

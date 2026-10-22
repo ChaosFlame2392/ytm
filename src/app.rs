@@ -26,6 +26,7 @@ impl App {
         prefetcher: AudioPrefetcher,
         mpv: MpvController,
     ) -> Self {
+        let _ = cache.prune_lru();
         Self {
             queue,
             cache,
@@ -34,11 +35,17 @@ impl App {
         }
     }
 
-    /// Loads and plays the current track in the queue, then schedules prefetching the next track.
+    /// Loads and plays the current track in the queue.
+    /// If not cached, starts playing immediately via remote streaming URL and initiates background caching.
+    /// In all cases, triggers ahead-of-time prefetching of the next track.
     pub fn play_current(&mut self) -> Result<(), MpvError> {
         if let Some(track) = self.queue.current_track() {
+            let is_cached = self.cache.is_cached(&track.id);
             let source = self.cache.resolve_source(&track.id);
             self.mpv.loadfile(source.as_str())?;
+            if !is_cached {
+                self.prefetcher.prefetch(&track.id);
+            }
             self.prefetcher.prefetch_next(&self.queue);
         }
         Ok(())
@@ -52,7 +59,7 @@ impl App {
                 self.mpv.toggle_pause()?;
             }
             KeyAction::NextTrack => {
-                if self.queue.next().is_some() {
+                if self.queue.skip_next().is_some() {
                     self.play_current()?;
                 }
             }
@@ -118,18 +125,10 @@ impl App {
         }
     }
 
-    /// Formats and renders 2-line status bar to the given writer, truncating to terminal width if available.
+    /// Formats and renders 2-line status bar to the given writer.
     pub fn render_status<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         let state = self.current_status_state();
-        let (mut l1, mut l2) = state.format_lines();
-        if let Ok((cols, _)) = crossterm::terminal::size() {
-            let width = cols as usize;
-            if width > 0 {
-                l1 = crate::ui::truncate_to_width(&l1, width);
-                l2 = crate::ui::truncate_to_width(&l2, width);
-            }
-        }
-        render_status_bar(writer, &l1, &l2)
+        render_status_bar(writer, &state)
     }
 
     /// Runs the interactive event loop with the specified termination signal flag.

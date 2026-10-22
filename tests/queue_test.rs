@@ -63,13 +63,25 @@ fn test_single_track_loop() {
         assert_eq!(queue.natural_index(), Some(0));
     }
 
+    // peek_next() still returns the upcoming track 1
+    assert_eq!(queue.peek_next().unwrap().id, "id_001");
+
+    // skip_next() manually advances past the loop
+    assert_eq!(queue.skip_next().unwrap().id, "id_001");
+    assert_eq!(queue.cursor, 1);
+    assert_eq!(queue.natural_index(), Some(1));
+
+    // now next() loops on track 1
+    assert_eq!(queue.next().unwrap().id, "id_001");
+    assert_eq!(queue.cursor, 1);
+
     queue.toggle_loop();
     assert!(!queue.single_loop);
 
-    // Now advances to track 1
-    assert_eq!(queue.next().unwrap().id, "id_001");
-    assert_eq!(queue.cursor, 1);
-    assert_eq!(queue.natural_index(), Some(1));
+    // Now advances to track 2
+    assert_eq!(queue.next().unwrap().id, "id_002");
+    assert_eq!(queue.cursor, 2);
+    assert_eq!(queue.natural_index(), Some(2));
 }
 
 #[test]
@@ -93,7 +105,7 @@ fn test_shuffle_toggle_workflow_and_iceberg_reset() {
     assert_eq!(queue.natural_index(), Some(3));
     assert_eq!(queue.current_track().unwrap().id, "id_003");
     // Preserves played history
-    assert_eq!(&queue.queue[0..3], &[0, 1, 2]);
+    assert_eq!(&queue.playback_order[0..3], &[0, 1, 2]);
 
     // 3. Advance in shuffled queue
     let next_track_index = queue.next().expect("shuffled track").index;
@@ -112,10 +124,10 @@ fn test_shuffle_toggle_workflow_and_iceberg_reset() {
     // The upcoming tracks must start at natural_index + 1
     let expected_next_idx = if next_natural + 1 < n {
         // Look for the next natural index among remaining upcoming
-        let upcoming = &queue.queue[5..];
+        let upcoming = &queue.playback_order[5..];
         upcoming[0]
     } else {
-        queue.queue[5]
+        queue.playback_order[5]
     };
     assert_eq!(queue.peek_next().unwrap().index, expected_next_idx);
 
@@ -131,7 +143,7 @@ fn test_shuffle_toggle_workflow_and_iceberg_reset() {
 fn test_empty_and_single_track_behavior() {
     let mut empty = Queue::default();
     assert!(empty.tracks.is_empty());
-    assert!(empty.queue.is_empty());
+    assert!(empty.playback_order.is_empty());
     assert_eq!(empty.cursor, 0);
     assert_eq!(empty.natural_index(), None);
     assert_eq!(empty.current_track(), None);

@@ -36,6 +36,9 @@ fn main() {
     if let Err(e) = cache.ensure_audio_dir() {
         eprintln!("Warning: could not ensure cache directory: {}", e);
     }
+    if let Err(e) = cache.prune_lru() {
+        eprintln!("Warning: could not prune cache on startup: {}", e);
+    }
     let prefetcher = AudioPrefetcher::new(cache.clone());
 
     let mpv = match MpvController::start() {

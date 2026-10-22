@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
 use ytm::{
-    AudioCache, AudioDownloader, AudioPrefetcher, AudioSource, Queue, Track,
-    DEFAULT_MAX_CACHE_BYTES, DEFAULT_TARGET_CACHE_BYTES,
+    default_cache_dir, AudioCache, AudioDownloader, AudioPrefetcher, AudioSource, PlaylistManager,
+    Queue, Track, DEFAULT_MAX_CACHE_BYTES, DEFAULT_TARGET_CACHE_BYTES,
 };
 
 #[test]
@@ -16,6 +16,10 @@ fn test_cache_default_limits_and_env_dir() {
 
     let base_custom = std::env::temp_dir().join("ytm_custom_env_dir");
     std::env::set_var("YTM_CACHE_DIR", base_custom.to_str().unwrap());
+
+    assert_eq!(default_cache_dir(), base_custom);
+    assert_eq!(PlaylistManager::default_cache_dir(), base_custom);
+    assert_eq!(AudioCache::default_audio_dir(), base_custom.join("audio"));
 
     let cache = AudioCache::default();
     assert_eq!(cache.audio_dir, base_custom.join("audio"));

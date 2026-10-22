@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use ytm::ui::{
     format_line1, format_line2, format_time, parse_key_event, render_status_bar,
-    wipe_status_lines, KeyAction, StatusState,
+    render_status_lines, wipe_status_lines, KeyAction, StatusState,
 };
 
 #[test]
@@ -83,6 +83,8 @@ fn test_status_state_helper() {
         single_loop: false,
         next_title: Some("Track B"),
     };
+    assert_eq!(state.format_line1(), "[▶] Track A (00:30 / 03:00)  [⚡ Cached]");
+    assert_eq!(state.format_line2(), "[Shuffle: ON] [Loop: OFF]  Next: Track B");
     let (l1, l2) = state.format_lines();
     assert_eq!(l1, "[▶] Track A (00:30 / 03:00)  [⚡ Cached]");
     assert_eq!(l2, "[Shuffle: ON] [Loop: OFF]  Next: Track B");
@@ -91,13 +93,29 @@ fn test_status_state_helper() {
 #[test]
 fn test_render_status_bar_and_wipe_ansi() {
     let mut buf = Vec::new();
-    render_status_bar(&mut buf, "Line 1 Content", "Line 2 Content").unwrap();
+    render_status_lines(&mut buf, "Line 1 Content", "Line 2 Content").unwrap();
     let rendered = String::from_utf8(buf).unwrap();
     // Must contain carriage return \r, line clear \x1b[2K, newline \n, and move up \x1b[1A\r
     assert_eq!(
         rendered,
         "\r\x1b[2KLine 1 Content\n\r\x1b[2KLine 2 Content\x1b[1A\r"
     );
+
+    let state = StatusState {
+        is_paused: false,
+        title: "Track 1",
+        position: Some(10.0),
+        duration: Some(60.0),
+        is_cached: false,
+        shuffle: false,
+        single_loop: false,
+        next_title: None,
+    };
+    let mut state_buf = Vec::new();
+    render_status_bar(&mut state_buf, &state).unwrap();
+    let state_rendered = String::from_utf8(state_buf).unwrap();
+    assert!(state_rendered.contains("[▶] Track 1 (00:10 / 01:00)  [🌐 Stream]"));
+    assert!(state_rendered.contains("[Shuffle: OFF] [Loop: OFF]  Next: None"));
 
     let mut wipe_buf = Vec::new();
     wipe_status_lines(&mut wipe_buf).unwrap();

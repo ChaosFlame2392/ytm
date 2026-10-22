@@ -3,7 +3,7 @@ use crate::playlist::Track;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Queue {
     pub tracks: Vec<Track>,
-    pub queue: Vec<usize>,
+    pub playback_order: Vec<usize>,
     pub cursor: usize,
     pub shuffle: bool,
     pub single_loop: bool,
@@ -20,7 +20,7 @@ impl Queue {
         let n = tracks.len();
         Self {
             tracks,
-            queue: (0..n).collect(),
+            playback_order: (0..n).collect(),
             cursor: 0,
             shuffle: false,
             single_loop: false,
@@ -28,36 +28,38 @@ impl Queue {
     }
 
     pub fn current_track(&self) -> Option<&Track> {
-        let idx = *self.queue.get(self.cursor)?;
+        let idx = *self.playback_order.get(self.cursor)?;
         self.tracks.get(idx)
     }
 
+    /// Returns the upcoming track in playback order without modifying cursor position.
+    /// Note: Returns the next track in sequence even when `single_loop` is enabled.
+    /// This allows ahead-of-time prefetching and informs the user via UI what plays
+    /// when looping is disabled or when the track is manually skipped.
     pub fn peek_next(&self) -> Option<&Track> {
-        if self.queue.is_empty() {
+        if self.playback_order.is_empty() {
             return None;
         }
-        let next_cursor = if self.cursor + 1 < self.queue.len() {
+        let next_cursor = if self.cursor + 1 < self.playback_order.len() {
             self.cursor + 1
         } else {
             0
         };
-        let idx = *self.queue.get(next_cursor)?;
+        let idx = *self.playback_order.get(next_cursor)?;
         self.tracks.get(idx)
     }
 
     pub fn natural_index(&self) -> Option<usize> {
-        self.queue.get(self.cursor).copied()
+        self.playback_order.get(self.cursor).copied()
     }
 
-    #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Option<&Track> {
-        if self.queue.is_empty() {
+    /// Unconditionally advances to the next track in playback order, bypassing `single_loop`.
+    /// Used for manual skip actions (e.g. key `>`).
+    pub fn skip_next(&mut self) -> Option<&Track> {
+        if self.playback_order.is_empty() {
             return None;
         }
-        if self.single_loop {
-            return self.current_track();
-        }
-        if self.cursor + 1 < self.queue.len() {
+        if self.cursor + 1 < self.playback_order.len() {
             self.cursor += 1;
         } else {
             self.cursor = 0;
@@ -65,8 +67,22 @@ impl Queue {
         self.current_track()
     }
 
+    /// Advances playback for natural track completion (EOF).
+    /// If `single_loop` is enabled, repeats the current track without advancing.
+    /// Otherwise, advances to the next track in playback order.
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> Option<&Track> {
+        if self.playback_order.is_empty() {
+            return None;
+        }
+        if self.single_loop {
+            return self.current_track();
+        }
+        self.skip_next()
+    }
+
     pub fn prev(&mut self) -> Option<&Track> {
-        if self.queue.is_empty() {
+        if self.playback_order.is_empty() {
             return None;
         }
         if self.cursor > 0 {
@@ -85,28 +101,28 @@ impl Queue {
     pub fn reset_to_top(&mut self) {
         self.cursor = 0;
         if self.tracks.is_empty() {
-            self.queue.clear();
+            self.playback_order.clear();
             return;
         }
-        self.queue = (0..self.tracks.len()).collect();
-        if self.shuffle && self.queue.len() > 1 {
+        self.playback_order = (0..self.tracks.len()).collect();
+        if self.shuffle && self.playback_order.len() > 1 {
             use rand::seq::SliceRandom;
-            self.queue[1..].shuffle(&mut rand::thread_rng());
+            self.playback_order[1..].shuffle(&mut rand::thread_rng());
         }
     }
 
     pub fn toggle_shuffle_with_rng<R: rand::Rng + ?Sized>(&mut self, rng: &mut R) -> bool {
         self.shuffle = !self.shuffle;
         if self.shuffle {
-            if self.cursor < self.queue.len() {
+            if self.cursor < self.playback_order.len() {
                 use rand::seq::SliceRandom;
-                self.queue[self.cursor + 1..].shuffle(rng);
+                self.playback_order[self.cursor + 1..].shuffle(rng);
             }
         } else {
             let n = self.tracks.len();
-            if n > 0 && self.cursor < self.queue.len() {
-                let natural_idx = self.queue[self.cursor];
-                self.queue[self.cursor + 1..].sort_by_key(|&idx| {
+            if n > 0 && self.cursor < self.playback_order.len() {
+                let natural_idx = self.playback_order[self.cursor];
+                self.playback_order[self.cursor + 1..].sort_by_key(|&idx| {
                     if idx > natural_idx {
                         idx - natural_idx
                     } else {
@@ -234,6 +250,9 @@ mod tests {
         assert!(queue.toggle_loop());
         assert!(queue.single_loop);
 
+        // peek_next() still returns upcoming track (track 1)
+        assert_eq!(queue.peek_next().unwrap().id, "video_1");
+
         // next() stays on track 0
         let t0 = queue.next().expect("stays on track 0");
         assert_eq!(t0.id, "video_0");
@@ -243,14 +262,25 @@ mod tests {
         assert_eq!(t0_again.id, "video_0");
         assert_eq!(queue.cursor, 0);
 
+        // skip_next() unconditionally advances to track 1 even with loop on
+        let t1_skip = queue.skip_next().expect("skip advances to track 1");
+        assert_eq!(t1_skip.id, "video_1");
+        assert_eq!(queue.cursor, 1);
+        assert!(queue.single_loop);
+
+        // next() now loops on track 1
+        let t1_loop = queue.next().expect("loops on track 1");
+        assert_eq!(t1_loop.id, "video_1");
+        assert_eq!(queue.cursor, 1);
+
         // Turn loop off
         assert!(!queue.toggle_loop());
         assert!(!queue.single_loop);
 
-        // next() advances to track 1
-        let t1 = queue.next().expect("advances to track 1");
-        assert_eq!(t1.id, "video_1");
-        assert_eq!(queue.cursor, 1);
+        // next() advances to track 2
+        let t2 = queue.next().expect("advances to track 2");
+        assert_eq!(t2.id, "video_2");
+        assert_eq!(queue.cursor, 2);
     }
 
     #[test]
@@ -284,7 +314,7 @@ mod tests {
         assert_eq!(queue.natural_index(), Some(2));
         assert_eq!(queue.current_track().unwrap().id, "video_2");
 
-        let before_upcoming = queue.queue[3..].to_vec();
+        let before_upcoming = queue.playback_order[3..].to_vec();
         assert_eq!(before_upcoming, (3..n).collect::<Vec<_>>());
 
         assert!(queue.toggle_shuffle());
@@ -295,15 +325,15 @@ mod tests {
         assert_eq!(queue.current_track().unwrap().id, "video_2");
 
         // History preserved
-        assert_eq!(&queue.queue[0..2], &[0, 1]);
+        assert_eq!(&queue.playback_order[0..2], &[0, 1]);
 
         // Upcoming shuffled: same set of elements, but reordered
-        let mut after_upcoming_sorted = queue.queue[3..].to_vec();
+        let mut after_upcoming_sorted = queue.playback_order[3..].to_vec();
         after_upcoming_sorted.sort();
         assert_eq!(after_upcoming_sorted, (3..n).collect::<Vec<_>>());
 
         // Extremely low probability (1/17! < 1e-14) of being identical to sorted
-        assert_ne!(queue.queue[3..], before_upcoming);
+        assert_ne!(queue.playback_order[3..], before_upcoming);
     }
 
     #[test]
@@ -311,7 +341,7 @@ mod tests {
         // Scenario 1: Start at index 0, scramble upcoming, toggle OFF
         let mut queue = Queue::new(sample_tracks(5));
         queue.shuffle = true;
-        queue.queue = vec![0, 4, 2, 1, 3];
+        queue.playback_order = vec![0, 4, 2, 1, 3];
         queue.cursor = 0;
 
         assert!(!queue.toggle_shuffle()); // toggled OFF
@@ -320,26 +350,26 @@ mod tests {
         assert_eq!(queue.natural_index(), Some(0));
         assert_eq!(queue.current_track().unwrap().id, "video_0");
         // Upcoming tracks restored in sequential natural order 1..5
-        assert_eq!(queue.queue, vec![0, 1, 2, 3, 4]);
+        assert_eq!(queue.playback_order, vec![0, 1, 2, 3, 4]);
 
         // Scenario 2: At track 2 with remaining upcoming scrambled
         let mut queue2 = Queue::new(sample_tracks(6));
         queue2.shuffle = true;
         queue2.cursor = 2;
-        queue2.queue = vec![0, 1, 2, 5, 3, 4];
+        queue2.playback_order = vec![0, 1, 2, 5, 3, 4];
 
         assert!(!queue2.toggle_shuffle()); // toggled OFF
         assert_eq!(queue2.cursor, 2);
         assert_eq!(queue2.natural_index(), Some(2));
         assert_eq!(queue2.current_track().unwrap().id, "video_2");
         // Remaining unplayed upcoming 3, 4, 5 reordered sequentially
-        assert_eq!(queue2.queue, vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(queue2.playback_order, vec![0, 1, 2, 3, 4, 5]);
 
         // Scenario 3: Wrap-around case: playing track 4 in 6-track playlist, remaining {1, 5, 0}
         let mut queue3 = Queue::new(sample_tracks(6));
         queue3.shuffle = true;
         queue3.cursor = 2;
-        queue3.queue = vec![2, 3, 4, 1, 5, 0];
+        queue3.playback_order = vec![2, 3, 4, 1, 5, 0];
         // At cursor 2, track is 4 (natural_index = 4). Upcoming are 1, 5, 0.
         assert_eq!(queue3.natural_index(), Some(4));
 
@@ -348,7 +378,7 @@ mod tests {
         assert_eq!(queue3.natural_index(), Some(4));
         // Order starting from natural_index + 1 (5), wrapping to 0, 1:
         // Upcoming must be [5, 0, 1]!
-        assert_eq!(queue3.queue, vec![2, 3, 4, 5, 0, 1]);
+        assert_eq!(queue3.playback_order, vec![2, 3, 4, 5, 0, 1]);
         assert_eq!(queue3.peek_next().unwrap().id, "video_5");
     }
 }
