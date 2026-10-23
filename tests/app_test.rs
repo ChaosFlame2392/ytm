@@ -557,7 +557,8 @@ fn test_app_single_loop_manual_skip_vs_natural_eof() {
 
 #[test]
 fn test_app_initialization_prunes_cache() {
-    let (client_stream, _server_stream) = UnixStream::pair().unwrap();
+    let (client_stream, server_stream) = UnixStream::pair().unwrap();
+    drop(server_stream);
     let mpv = MpvController::from_stream(client_stream);
 
     let temp_dir = tempfile_dir("ytm-prune-test");
