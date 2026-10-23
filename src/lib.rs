@@ -25,9 +25,9 @@ pub use playlist::{PlaylistManager, Track};
 pub use prefetch::{AudioDownloader, AudioPrefetcher, YtDlpDownloader};
 pub use queue::Queue;
 pub use ui::{
-    format_line1, format_line2, format_time, parse_key_event, render_status_bar,
-    render_status_lines, setup_signal_handler, truncate_to_width, wipe_status_lines, KeyAction,
-    StatusState, TerminalGuard,
+    format_line1, format_line2, format_line2_with_error, format_time, parse_key_event,
+    render_status_bar, render_status_bar_with_width, render_status_lines, setup_signal_handler,
+    truncate_to_width, wipe_status_lines, KeyAction, StatusState, TerminalGuard,
 };
 
 

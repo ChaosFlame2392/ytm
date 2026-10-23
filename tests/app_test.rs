@@ -123,6 +123,185 @@ fn test_app_eof_event_advances_queue_and_plays_next() {
 }
 
 #[test]
+fn test_app_stream_error_event_advances_queue_and_sets_error_notification() {
+    let (mut app, mut server, _downloaded) = setup_test_app();
+
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+        let mut line = String::new();
+
+        // Expect loadfile for vid_1 after vid_0 encounters error
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "loadfile");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    assert_eq!(app.queue.cursor, 0);
+    assert!(app.error_message.is_none());
+
+    // Simulate MPV error event (track failed to stream or decode)
+    app.handle_mpv_event(MpvEvent::EndFile {
+        reason: EndFileReason::Error,
+    })
+    .unwrap();
+
+    // Verify queue advanced to track 1
+    assert_eq!(app.queue.cursor, 1);
+    assert_eq!(app.queue.current_track().unwrap().id, "vid_1");
+
+    // Verify error notification is set on App and reflected in StatusState
+    assert_eq!(app.error_message.as_deref(), Some("[!] Stream Error"));
+    let status = app.current_status_state();
+    assert_eq!(status.error_message, Some("[!] Stream Error"));
+
+    let (_l1, l2) = status.format_lines();
+    assert!(l2.contains("[!] Stream Error"), "Line 2 should display error badge: {}", l2);
+
+    responder.join().unwrap();
+}
+
+#[test]
+fn test_app_stream_error_other_reason_advances_and_sets_message() {
+    let (mut app, mut server, _downloaded) = setup_test_app();
+
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+        let mut line = String::new();
+
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(val["command"][0], "loadfile");
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    app.handle_mpv_event(MpvEvent::EndFile {
+        reason: EndFileReason::Other("network timeout".to_string()),
+    })
+    .unwrap();
+
+    assert_eq!(app.queue.cursor, 1);
+    assert!(app.error_message.as_ref().unwrap().contains("[!] Stream Error"));
+
+    responder.join().unwrap();
+}
+
+#[test]
+fn test_app_stream_error_all_tracks_fail_halts_infinite_loop() {
+    let (mut app, mut server, _downloaded) = setup_test_app();
+
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+
+        // Respond to track 1 loadfile
+        let mut line1 = String::new();
+        reader.read_line(&mut line1).unwrap();
+        let val1: serde_json::Value = serde_json::from_str(&line1).unwrap();
+        assert_eq!(val1["command"][0], "loadfile");
+        let req_id1 = val1["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id1).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // Respond to track 2 loadfile
+        let mut line2 = String::new();
+        reader.read_line(&mut line2).unwrap();
+        let val2: serde_json::Value = serde_json::from_str(&line2).unwrap();
+        assert_eq!(val2["command"][0], "loadfile");
+        let req_id2 = val2["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id2).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    // Track 0 fails -> advances to track 1
+    app.handle_mpv_event(MpvEvent::EndFile {
+        reason: EndFileReason::Error,
+    })
+    .unwrap();
+    assert_eq!(app.queue.cursor, 1);
+
+    // Track 1 fails -> advances to track 2
+    app.handle_mpv_event(MpvEvent::EndFile {
+        reason: EndFileReason::Error,
+    })
+    .unwrap();
+    assert_eq!(app.queue.cursor, 2);
+
+    // Track 2 fails -> all tracks in queue have now failed
+    // Must NOT call loadfile again; loop terminates cleanly without spinning
+    app.handle_mpv_event(MpvEvent::EndFile {
+        reason: EndFileReason::Error,
+    })
+    .unwrap();
+
+    assert!(app.error_message.is_some());
+    assert_eq!(app.failed_tracks.len(), 3);
+
+    responder.join().unwrap();
+}
+
+#[test]
+fn test_app_stream_error_cleared_on_user_action_and_natural_eof() {
+    let (mut app, mut server, _downloaded) = setup_test_app();
+
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+
+        // 1. Error on vid_0 -> loadfile for vid_1
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // 2. Normal EOF on vid_1 -> loadfile for vid_2
+        let mut line2 = String::new();
+        reader.read_line(&mut line2).unwrap();
+        let val2: serde_json::Value = serde_json::from_str(&line2).unwrap();
+        let req_id2 = val2["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id2).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    // Trigger error on track 0
+    app.handle_mpv_event(MpvEvent::EndFile {
+        reason: EndFileReason::Error,
+    })
+    .unwrap();
+    assert!(app.error_message.is_some());
+
+    // Trigger natural EOF on track 1
+    app.handle_mpv_event(MpvEvent::EndFile {
+        reason: EndFileReason::Eof,
+    })
+    .unwrap();
+    // Error notification must be cleared
+    assert!(app.error_message.is_none());
+
+    responder.join().unwrap();
+}
+
+#[test]
 fn test_app_action_next_and_prev_tracks() {
     let (mut app, mut server, _downloaded) = setup_test_app();
 

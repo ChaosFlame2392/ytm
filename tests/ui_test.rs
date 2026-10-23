@@ -85,12 +85,67 @@ fn test_status_state_helper() {
         shuffle: true,
         single_loop: false,
         next_title: Some("Track B"),
+        error_message: None,
     };
     assert_eq!(state.format_line1(), "[⏸] Track A (00:30 / 03:00)  [⚡ Cached]");
     assert_eq!(state.format_line2(), "[Shuffle: ON] [Loop: OFF]  Next: Track B");
     let (l1, l2) = state.format_lines();
     assert_eq!(l1, "[⏸] Track A (00:30 / 03:00)  [⚡ Cached]");
     assert_eq!(l2, "[Shuffle: ON] [Loop: OFF]  Next: Track B");
+}
+
+#[test]
+fn test_status_state_with_error_message() {
+    let state = StatusState {
+        is_paused: false,
+        title: "Track A",
+        position: Some(30.0),
+        duration: Some(180.0),
+        is_cached: false,
+        shuffle: false,
+        single_loop: false,
+        next_title: Some("Track B"),
+        error_message: Some("[!] Stream Error"),
+    };
+    let l2 = state.format_line2();
+    assert!(l2.contains("[!] Stream Error"), "Line 2 should contain error badge: {}", l2);
+    assert!(l2.contains("Next: Track B"), "Line 2 should contain next track: {}", l2);
+}
+
+#[test]
+fn test_render_status_bar_with_error_and_cjk_truncation() {
+    use unicode_width::UnicodeWidthStr;
+    use ytm::ui::render_status_bar_with_width;
+
+    let state = StatusState {
+        is_paused: false,
+        title: "超電磁砲 Opening Theme - Only My Railgun",
+        position: Some(5.0),
+        duration: Some(250.0),
+        is_cached: false,
+        shuffle: true,
+        single_loop: false,
+        next_title: Some("君の知らない物語 (Bakemonogatari ED)"),
+        error_message: Some("[!] Stream Error (ネットワーク切断)"),
+    };
+
+    let mut buf = Vec::new();
+    render_status_bar_with_width(&mut buf, &state, Some(50)).unwrap();
+    let rendered = String::from_utf8(buf).unwrap();
+
+    // The output should contain \r\x1b[2K
+    assert!(rendered.starts_with("\r\x1b[2K"));
+
+    // Extract line 1 and line 2 from rendered ANSI
+    // Format: \r\x1b[2K<line1>\n\r\x1b[2K<line2>\x1b[1A\r
+    let parts: Vec<&str> = rendered.split('\n').collect();
+    assert_eq!(parts.len(), 2);
+    let l1 = parts[0].trim_start_matches("\r\x1b[2K");
+    let l2 = parts[1].trim_start_matches("\r\x1b[2K").trim_end_matches("\x1b[1A\r");
+
+    assert!(UnicodeWidthStr::width(l1) <= 50, "Line 1 width {} exceeds 50", UnicodeWidthStr::width(l1));
+    assert!(UnicodeWidthStr::width(l2) <= 50, "Line 2 width {} exceeds 50", UnicodeWidthStr::width(l2));
+    assert!(l2.contains("[!] Stream Error"), "Line 2 must contain error prefix");
 }
 
 #[test]
@@ -113,6 +168,7 @@ fn test_render_status_bar_and_wipe_ansi() {
         shuffle: false,
         single_loop: false,
         next_title: None,
+        error_message: None,
     };
     let mut state_buf = Vec::new();
     render_status_bar(&mut state_buf, &state).unwrap();
