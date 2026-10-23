@@ -5,8 +5,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
 use ytm::{
-    default_cache_dir, AudioCache, AudioDownloader, AudioPrefetcher, AudioSource, PlaylistManager,
-    Queue, Track, DEFAULT_MAX_CACHE_BYTES, DEFAULT_TARGET_CACHE_BYTES,
+    build_ytdlp_command_with_cookies, configure_mpv_command_with_cookies, default_cache_dir,
+    default_config_dir, default_cookies_file, AudioCache, AudioDownloader, AudioPrefetcher,
+    AudioSource, Browser, CookieSource, PlaylistManager, Queue, Track, DEFAULT_MAX_CACHE_BYTES,
+    DEFAULT_TARGET_CACHE_BYTES,
 };
 
 #[test]
@@ -177,4 +179,62 @@ fn test_prefetcher_queueing_and_deduplication() {
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 
     let _ = fs::remove_dir_all(&test_dir);
+}
+
+#[test]
+fn test_auth_resolution_hierarchy_and_argument_formatting_offline() {
+    use std::process::Command;
+
+    // Verify all supported browser variants parse properly
+    let browsers = [
+        ("safari", Browser::Safari),
+        ("firefox", Browser::Firefox),
+        ("chrome", Browser::Chrome),
+        ("brave", Browser::Brave),
+        ("edge", Browser::Edge),
+        ("chromium", Browser::Chromium),
+        ("opera", Browser::Opera),
+        ("vivaldi", Browser::Vivaldi),
+        ("whale", Browser::Whale),
+    ];
+
+    for (name, browser) in browsers {
+        assert_eq!(Browser::parse(name), Some(browser));
+        let src = CookieSource::Browser(browser);
+        assert_eq!(src.ytdlp_args(), vec!["--cookies-from-browser", name]);
+        assert_eq!(src.mpv_arg(), format!("--ytdl-raw-options=cookies-from-browser={}", name));
+
+        // Command builders offline formatting check
+        let yt_cmd = build_ytdlp_command_with_cookies(Some(&src));
+        let yt_args: Vec<String> = yt_cmd.get_args().map(|s| s.to_string_lossy().into_owned()).collect();
+        assert_eq!(yt_args, vec!["--no-warnings", "--cookies-from-browser", name]);
+
+        let mut mpv_cmd = Command::new("mpv");
+        configure_mpv_command_with_cookies(&mut mpv_cmd, Some(&src));
+        let mpv_args: Vec<String> = mpv_cmd.get_args().map(|s| s.to_string_lossy().into_owned()).collect();
+        assert_eq!(mpv_args, vec![format!("--ytdl-raw-options=cookies-from-browser={}", name)]);
+    }
+
+    // Verify file cookies
+    let file_src = CookieSource::File(PathBuf::from("/non-disposable/cookies.txt"));
+    assert_eq!(file_src.ytdlp_args(), vec!["--cookies", "/non-disposable/cookies.txt"]);
+    assert_eq!(file_src.mpv_arg(), "--ytdl-raw-options=cookies=/non-disposable/cookies.txt");
+
+    let yt_file_cmd = build_ytdlp_command_with_cookies(Some(&file_src));
+    let yt_file_args: Vec<String> = yt_file_cmd.get_args().map(|s| s.to_string_lossy().into_owned()).collect();
+    assert_eq!(yt_file_args, vec!["--no-warnings", "--cookies", "/non-disposable/cookies.txt"]);
+
+    // Hierarchy test: YTM_COOKIES_FILE overrides browser & config file
+    let resolved = CookieSource::resolve_hierarchy(
+        Some("/top/priority/cookies.txt"),
+        Some("brave"),
+        Some(PathBuf::from("/config/cookies.txt")),
+        Some(Browser::Firefox),
+        |p| p == Path::new("/top/priority/cookies.txt"),
+    );
+    assert_eq!(resolved, Some(CookieSource::File(PathBuf::from("/top/priority/cookies.txt"))));
+
+    // Config dir lookup
+    let _ = default_config_dir();
+    let _ = default_cookies_file();
 }
