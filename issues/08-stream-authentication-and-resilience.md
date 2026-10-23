@@ -1,6 +1,6 @@
 # Issue 08: Stream Authentication, Resilient Playback & Error Diagnostics
 
-**Labels:** `ready-for-agent`
+**Labels:** `completed`
 
 ## Problem Statement
 
