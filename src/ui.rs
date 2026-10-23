@@ -42,6 +42,7 @@ pub fn format_line1(
         shuffle: false,
         single_loop: false,
         next_title: None,
+        error_message: None,
     }
     .format_line1()
 }
@@ -49,6 +50,16 @@ pub fn format_line1(
 /// Formats the second line of the in-place status bar from discrete arguments.
 /// Kept as a convenient helper for tests.
 pub fn format_line2(shuffle: bool, single_loop: bool, next_title: Option<&str>) -> String {
+    format_line2_with_error(shuffle, single_loop, next_title, None)
+}
+
+/// Formats the second line of the in-place status bar including an optional error message.
+pub fn format_line2_with_error(
+    shuffle: bool,
+    single_loop: bool,
+    next_title: Option<&str>,
+    error_message: Option<&str>,
+) -> String {
     StatusState {
         is_paused: false,
         title: "",
@@ -58,6 +69,7 @@ pub fn format_line2(shuffle: bool, single_loop: bool, next_title: Option<&str>) 
         shuffle,
         single_loop,
         next_title,
+        error_message,
     }
     .format_line2()
 }
@@ -97,6 +109,23 @@ pub struct StatusState<'a> {
     pub shuffle: bool,
     pub single_loop: bool,
     pub next_title: Option<&'a str>,
+    pub error_message: Option<&'a str>,
+}
+
+impl<'a> Default for StatusState<'a> {
+    fn default() -> Self {
+        Self {
+            is_paused: false,
+            title: "",
+            position: None,
+            duration: None,
+            is_cached: false,
+            shuffle: false,
+            single_loop: false,
+            next_title: None,
+            error_message: None,
+        }
+    }
 }
 
 impl<'a> StatusState<'a> {
@@ -115,7 +144,7 @@ impl<'a> StatusState<'a> {
     }
 
     /// Formats the second line of the in-place status bar:
-    /// `[Shuffle: ON/OFF]`, `[Loop: ON/OFF]`, and `Next: <next title>`.
+    /// `[Shuffle: ON/OFF]`, `[Loop: ON/OFF]`, optional `[!] <error>`, and `Next: <next title>`.
     pub fn format_line2(&self) -> String {
         let shuffle_badge = if self.shuffle {
             "[Shuffle: ON]"
@@ -128,7 +157,12 @@ impl<'a> StatusState<'a> {
             "[Loop: OFF]"
         };
         let next_str = format!("Next: {}", self.next_title.unwrap_or("None"));
-        format!("{} {}  {}", shuffle_badge, loop_badge, next_str)
+        match self.error_message {
+            Some(err) if !err.is_empty() => {
+                format!("{} {}  {}  {}", shuffle_badge, loop_badge, err, next_str)
+            }
+            _ => format!("{} {}  {}", shuffle_badge, loop_badge, next_str),
+        }
     }
 
     /// Formats both status bar lines as a pair (line1, line2).
@@ -138,17 +172,27 @@ impl<'a> StatusState<'a> {
 }
 
 /// Renders 2 lines strictly in place (`\r\x1b[2K`), overwriting without scrolling the terminal.
-/// Accepts `&StatusState` directly, truncates to terminal width if available, and flushes output.
-pub fn render_status_bar<W: Write>(writer: &mut W, state: &StatusState<'_>) -> io::Result<()> {
+/// Accepts an explicit optional terminal display column limit for width-bounded truncation.
+pub fn render_status_bar_with_width<W: Write>(
+    writer: &mut W,
+    state: &StatusState<'_>,
+    max_width: Option<usize>,
+) -> io::Result<()> {
     let (mut l1, mut l2) = state.format_lines();
-    if let Ok((cols, _)) = crossterm::terminal::size() {
-        let width = cols as usize;
+    if let Some(width) = max_width {
         if width > 0 {
             l1 = truncate_to_width(&l1, width);
             l2 = truncate_to_width(&l2, width);
         }
     }
     render_status_lines(writer, &l1, &l2)
+}
+
+/// Renders 2 lines strictly in place (`\r\x1b[2K`), overwriting without scrolling the terminal.
+/// Accepts `&StatusState` directly, truncates to terminal width if available, and flushes output.
+pub fn render_status_bar<W: Write>(writer: &mut W, state: &StatusState<'_>) -> io::Result<()> {
+    let max_width = crossterm::terminal::size().ok().map(|(cols, _)| cols as usize);
+    render_status_bar_with_width(writer, state, max_width)
 }
 
 /// Helper function to write raw status lines in-place without scrolling.

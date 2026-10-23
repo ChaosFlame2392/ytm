@@ -5,8 +5,10 @@ use crate::queue::Queue;
 use crate::ui::{
     calculate_modal_rect, enter_alternate_screen, leave_alternate_screen, parse_key_event,
     parse_modal_key_event, parse_modal_search_key_event, render_floating_modal, render_status_bar,
-    setup_signal_handler, KeyAction, ModalKeyAction, ModalState, StatusState, TerminalGuard,
+    render_status_bar_with_width, setup_signal_handler, KeyAction, ModalKeyAction, ModalState,
+    StatusState, TerminalGuard,
 };
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -20,6 +22,8 @@ pub struct App {
     pub mpv: MpvController,
     pub modal: ModalState,
     pub playback_started: bool,
+    pub error_message: Option<String>,
+    pub failed_tracks: HashSet<String>,
 }
 
 impl App {
@@ -37,6 +41,8 @@ impl App {
             mpv,
             modal: ModalState::default(),
             playback_started: false,
+            error_message: None,
+            failed_tracks: HashSet::new(),
         }
     }
 
@@ -64,6 +70,8 @@ impl App {
     /// Prefetches upcoming tracks and prepares status bar.
     pub fn load_initial(&mut self) -> Result<(), MpvError> {
         self.playback_started = false;
+        self.error_message = None;
+        self.failed_tracks.clear();
         self.mpv.pause()?;
         self.play_current()?;
         Ok(())
@@ -96,11 +104,13 @@ impl App {
                 self.mpv.toggle_pause()?;
             }
             KeyAction::NextTrack => {
+                self.error_message = None;
                 if self.queue.skip_next().is_some() {
                     self.play_current()?;
                 }
             }
             KeyAction::PreviousTrack => {
+                self.error_message = None;
                 if self.queue.prev().is_some() {
                     self.play_current()?;
                 }
@@ -116,6 +126,8 @@ impl App {
                 self.prefetcher.prefetch_next(&self.queue);
             }
             KeyAction::ResetToTop => {
+                self.error_message = None;
+                self.failed_tracks.clear();
                 self.queue.reset_to_top();
                 self.play_current()?;
             }
@@ -182,6 +194,7 @@ impl App {
             }
             ModalKeyAction::Commit => {
                 self.playback_started = true;
+                self.error_message = None;
                 if !self.modal.selection_set.is_empty() {
                     let selections = self.modal.selection_set.clone();
                     self.close_modal();
@@ -231,15 +244,59 @@ impl App {
         render_floating_modal(writer, &rect, &self.modal, &self.queue, Some(&self.cache))
     }
 
-    /// Processes MPV IPC events, advancing track automatically on EOF.
-    pub fn handle_mpv_event(&mut self, event: MpvEvent) -> Result<(), MpvError> {
-        if let MpvEvent::EndFile {
-            reason: EndFileReason::Eof,
-        } = event
-        {
-            if self.queue.next().is_some() {
-                self.play_current()?;
+    /// Handles a stream or decode error from playback backend.
+    /// Sets transient error message, marks track as failed, and advances to next track if available.
+    pub fn handle_stream_error(&mut self, detail: Option<&str>) -> Result<(), MpvError> {
+        let msg = match detail {
+            Some(d) if !d.is_empty() => format!("[!] Stream Error: {}", d),
+            _ => "[!] Stream Error".to_string(),
+        };
+        self.error_message = Some(msg);
+
+        if let Some(track) = self.queue.current_track() {
+            self.failed_tracks.insert(track.id.clone());
+        }
+
+        let total_tracks = self.queue.playback_order.len();
+        let mut advanced = false;
+        for _ in 0..total_tracks {
+            if let Some(next_track) = self.queue.skip_next() {
+                if !self.failed_tracks.contains(&next_track.id) {
+                    advanced = true;
+                    break;
+                }
             }
+        }
+
+        if advanced {
+            self.play_current()?;
+        }
+
+        Ok(())
+    }
+
+    /// Processes MPV IPC events, advancing track automatically on EOF or handling playback errors.
+    pub fn handle_mpv_event(&mut self, event: MpvEvent) -> Result<(), MpvError> {
+        match event {
+            MpvEvent::EndFile {
+                reason: EndFileReason::Eof,
+            } => {
+                self.error_message = None;
+                if self.queue.next().is_some() {
+                    self.play_current()?;
+                }
+            }
+            MpvEvent::EndFile {
+                reason: EndFileReason::Error,
+            } => {
+                self.handle_stream_error(None)?;
+            }
+            MpvEvent::EndFile {
+                reason: EndFileReason::Other(ref msg),
+            } => {
+                self.handle_stream_error(Some(msg.as_str()))?;
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -267,7 +324,18 @@ impl App {
             shuffle: self.queue.shuffle,
             single_loop: self.queue.single_loop,
             next_title,
+            error_message: self.error_message.as_deref(),
         }
+    }
+
+    /// Formats and renders 2-line status bar to the given writer with an optional column width limit.
+    pub fn render_status_with_width<W: Write>(
+        &self,
+        writer: &mut W,
+        max_width: Option<usize>,
+    ) -> io::Result<()> {
+        let state = self.current_status_state();
+        render_status_bar_with_width(writer, &state, max_width)
     }
 
     /// Formats and renders 2-line status bar to the given writer.

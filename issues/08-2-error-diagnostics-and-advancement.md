@@ -4,10 +4,10 @@
 
 **Blocked by:** 08-1
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Update `App::handle_mpv_event` to handle `EndFileReason::Error` and `EndFileReason::Other`.
-- [ ] Automatically advance to the next track in the queue when an uncached stream error occurs.
-- [ ] Add temporary error notification state to `App` and `StatusState` displayed in the 2-line status bar.
-- [ ] Ensure error messages strictly respect terminal column width and CJK display boundaries via `unicode-width`.
-- [ ] Tests in `tests/app_test.rs` asserting automatic advancement on MPV error events and proper status bar formatting.
+- [x] Update `App::handle_mpv_event` to handle `EndFileReason::Error` and `EndFileReason::Other`.
+- [x] Automatically advance to the next track in the queue when an uncached stream error occurs.
+- [x] Add temporary error notification state to `App` and `StatusState` displayed in the 2-line status bar.
+- [x] Ensure error messages strictly respect terminal column width and CJK display boundaries via `unicode-width`.
+- [x] Tests in `tests/app_test.rs` asserting automatic advancement on MPV error events and proper status bar formatting.
