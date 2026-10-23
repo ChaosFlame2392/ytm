@@ -1,4 +1,5 @@
-use crate::cache::{AudioCache, CookieSource};
+use crate::auth::build_ytdlp_command;
+use crate::cache::AudioCache;
 use crate::queue::Queue;
 use std::collections::HashSet;
 use std::fs;
@@ -20,18 +21,14 @@ impl AudioDownloader for YtDlpDownloader {
             .to_str()
             .ok_or_else(|| "Invalid UTF-8 in temp path".to_string())?;
 
-        let mut cmd = std::process::Command::new("yt-dlp");
+        let mut cmd = build_ytdlp_command();
         cmd.args([
-            "--no-warnings",
             "-x",
             "--audio-format",
             "opus",
             "-o",
             tmp_path_str,
         ]);
-        if let Some(cookies) = CookieSource::resolve() {
-            cmd.args(cookies.ytdlp_args());
-        }
         cmd.arg(&url);
 
         let output = cmd

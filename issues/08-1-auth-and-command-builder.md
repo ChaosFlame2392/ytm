@@ -4,12 +4,12 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Create dedicated `src/auth.rs` containing `CookieSource` and browser validation.
-- [ ] Support config file lookup in `~/.config/ytm/cookies.txt` (and `$XDG_CONFIG_HOME/ytm/cookies.txt`), removing cookie lookup from disposable cache paths.
-- [ ] Provide unified `build_ytdlp_command()` helper for assembling `yt-dlp` invocations with standard flags and resolved cookies.
-- [ ] Provide `configure_mpv_command()` helper for injecting cookie arguments into `mpv`.
-- [ ] Refactor `src/cache.rs` to remove divergent cookie resolution logic.
-- [ ] Refactor `src/prefetch.rs`, `src/playlist.rs`, and `src/mpv.rs` to consume the centralized helpers.
-- [ ] Unit tests in `src/auth.rs` and `tests/cache_test.rs` verifying the resolution hierarchy and argument formatting offline.
+- [x] Create dedicated `src/auth.rs` containing `CookieSource` and browser validation.
+- [x] Support config file lookup in `~/.config/ytm/cookies.txt` (and `$XDG_CONFIG_HOME/ytm/cookies.txt`), removing cookie lookup from disposable cache paths.
+- [x] Provide unified `build_ytdlp_command()` helper for assembling `yt-dlp` invocations with standard flags and resolved cookies.
+- [x] Provide `configure_mpv_command()` helper for injecting cookie arguments into `mpv`.
+- [x] Refactor `src/cache.rs` to remove divergent cookie resolution logic.
+- [x] Refactor `src/prefetch.rs`, `src/playlist.rs`, and `src/mpv.rs` to consume the centralized helpers.
+- [x] Unit tests in `src/auth.rs` and `tests/cache_test.rs` verifying the resolution hierarchy and argument formatting offline.
