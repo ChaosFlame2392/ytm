@@ -265,7 +265,7 @@ impl MpvIpcClient {
         } else {
             // Use mpv length-prefixed EDL syntax (%length%path) to bypass macOS
             // QuickLook thumbnail generation on local file paths without syntax ambiguity.
-            let byte_len = path_or_url.as_bytes().len();
+            let byte_len = path_or_url.len();
             format!("edl://%{}%{}", byte_len, path_or_url)
         };
         let resp = self.send_command(&["loadfile", &target, "replace"])?;

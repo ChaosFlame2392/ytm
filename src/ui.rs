@@ -5,6 +5,7 @@ use crossterm::style::Print;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -50,28 +51,18 @@ pub fn format_line1(
 /// Formats the second line of the in-place status bar from discrete arguments.
 /// Kept as a convenient helper for tests.
 pub fn format_line2(shuffle: bool, single_loop: bool, next_title: Option<&str>) -> String {
-    format_line2_with_error(shuffle, single_loop, next_title, None)
-}
-
-/// Formats the second line of the in-place status bar including an optional error message.
-pub fn format_line2_with_error(
-    shuffle: bool,
-    single_loop: bool,
-    next_title: Option<&str>,
-    error_message: Option<&str>,
-) -> String {
-    StatusState {
-        is_paused: false,
-        title: "",
-        position: None,
-        duration: None,
-        is_cached: false,
+    let state = StatusState {
         shuffle,
         single_loop,
         next_title,
-        error_message,
-    }
-    .format_line2()
+        ..Default::default()
+    };
+    format_line2_with_error(&state)
+}
+
+/// Formats the second line of the in-place status bar from a StatusState reference.
+pub fn format_line2_with_error(state: &StatusState<'_>) -> String {
+    state.format_line2()
 }
 
 /// Truncates string to a maximum terminal column display width to prevent terminal wrapping.
@@ -99,7 +90,7 @@ pub fn truncate_to_width(s: &str, max_width: usize) -> String {
 }
 
 /// Represents the instantaneous playback status displayed in the terminal UI.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct StatusState<'a> {
     pub is_paused: bool,
     pub title: &'a str,
@@ -110,22 +101,6 @@ pub struct StatusState<'a> {
     pub single_loop: bool,
     pub next_title: Option<&'a str>,
     pub error_message: Option<&'a str>,
-}
-
-impl<'a> Default for StatusState<'a> {
-    fn default() -> Self {
-        Self {
-            is_paused: false,
-            title: "",
-            position: None,
-            duration: None,
-            is_cached: false,
-            shuffle: false,
-            single_loop: false,
-            next_title: None,
-            error_message: None,
-        }
-    }
 }
 
 impl<'a> StatusState<'a> {
@@ -639,21 +614,29 @@ impl ModalState {
 
 /// Formats a single content row in the floating queue modal.
 /// Deduplicates active marker, selection badge, track number, cache indicator (`[⚡]`),
-/// title truncation, right padding to `content_width`, and optional ANSI reverse video highlight.
+/// error indicator (`[!]`), title truncation, right padding to `content_width`, and optional ANSI reverse video highlight.
+#[allow(clippy::too_many_arguments)]
 pub fn format_modal_row(
     index: usize,
     title: &str,
     is_active: bool,
     is_selected: bool,
     is_cached: bool,
+    is_failed: bool,
     is_cursor: bool,
     content_width: usize,
 ) -> String {
     let active_marker = if is_active { "▶ " } else { "  " };
     let select_marker = if is_selected { "[x] " } else { "[ ] " };
     let num_str = format!("{:>3}. ", index + 1);
-    let cache_badge = if is_cached { "[⚡] " } else { "" };
-    let prefix = format!(" {}{}{}{}", active_marker, select_marker, num_str, cache_badge);
+    let badge = if is_failed {
+        "[!] "
+    } else if is_cached {
+        "[⚡] "
+    } else {
+        ""
+    };
+    let prefix = format!(" {}{}{}{}", active_marker, select_marker, num_str, badge);
     let prefix_len = UnicodeWidthStr::width(prefix.as_str());
 
     let avail_title_len = content_width.saturating_sub(prefix_len);
@@ -679,6 +662,7 @@ pub fn format_modal_lines(
     modal: &ModalState,
     queue: &crate::queue::Queue,
     cache: Option<&crate::cache::AudioCache>,
+    failed_tracks: Option<&HashSet<String>>,
 ) -> Vec<String> {
     let width = rect.width as usize;
     let content_height = rect.content_height();
@@ -754,6 +738,7 @@ pub fn format_modal_lines(
                     let is_active = queue_idx == queue.cursor;
                     let is_selected = modal.is_selected(queue_idx);
                     let is_cached = cache.is_some_and(|c| c.is_cached(&track.id));
+                    let is_failed = failed_tracks.is_some_and(|f| f.contains(&track.id));
                     let is_cursor = match_index == modal.search_cursor;
 
                     lines.push(format_modal_row(
@@ -762,6 +747,7 @@ pub fn format_modal_lines(
                         is_active,
                         is_selected,
                         is_cached,
+                        is_failed,
                         is_cursor,
                         content_width,
                     ));
@@ -790,6 +776,7 @@ pub fn format_modal_lines(
                 let is_active = item_index == queue.cursor;
                 let is_selected = modal.is_selected(item_index);
                 let is_cached = cache.is_some_and(|c| c.is_cached(&track.id));
+                let is_failed = failed_tracks.is_some_and(|f| f.contains(&track.id));
                 let is_cursor = item_index == modal.viewer_cursor;
 
                 lines.push(format_modal_row(
@@ -798,6 +785,7 @@ pub fn format_modal_lines(
                     is_active,
                     is_selected,
                     is_cached,
+                    is_failed,
                     is_cursor,
                     content_width,
                 ));
@@ -861,8 +849,9 @@ pub fn render_floating_modal<W: Write>(
     modal: &ModalState,
     queue: &crate::queue::Queue,
     cache: Option<&crate::cache::AudioCache>,
+    failed_tracks: Option<&HashSet<String>>,
 ) -> io::Result<()> {
-    let lines = format_modal_lines(rect, modal, queue, cache);
+    let lines = format_modal_lines(rect, modal, queue, cache, failed_tracks);
     for (i, line) in lines.iter().enumerate() {
         execute!(
             writer,

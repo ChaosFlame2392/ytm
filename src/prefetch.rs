@@ -115,27 +115,17 @@ impl AudioPrefetcher {
                         let final_path = cache_worker.cache_file_path(&video_id);
 
                         let res = downloader.download(&video_id, &tmp_path);
-                        let is_raw = crossterm::terminal::is_raw_mode_enabled().unwrap_or(false);
                         match res {
                             Ok(()) => {
                                 if tmp_path.exists() {
-                                    if let Err(e) = fs::rename(&tmp_path, &final_path) {
-                                        if !is_raw {
-                                            eprintln!(
-                                                "Error renaming prefetch temp {:?} to {:?}: {}",
-                                                tmp_path, final_path, e
-                                            );
-                                        }
+                                    if fs::rename(&tmp_path, &final_path).is_err() {
                                         let _ = fs::remove_file(&tmp_path);
                                     } else {
                                         let _ = cache_worker.prune_lru();
                                     }
                                 }
                             }
-                            Err(e) => {
-                                if !is_raw {
-                                    eprintln!("Prefetch error for {}: {}", video_id, e);
-                                }
+                            Err(_) => {
                                 if tmp_path.exists() {
                                     let _ = fs::remove_file(&tmp_path);
                                 }

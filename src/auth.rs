@@ -9,9 +9,6 @@ pub enum Browser {
     Brave,
     Edge,
     Chromium,
-    Opera,
-    Vivaldi,
-    Whale,
 }
 
 impl Browser {
@@ -23,9 +20,6 @@ impl Browser {
             Browser::Brave => "brave",
             Browser::Edge => "edge",
             Browser::Chromium => "chromium",
-            Browser::Opera => "opera",
-            Browser::Vivaldi => "vivaldi",
-            Browser::Whale => "whale",
         }
     }
 
@@ -37,9 +31,6 @@ impl Browser {
             "brave" => Some(Browser::Brave),
             "edge" => Some(Browser::Edge),
             "chromium" => Some(Browser::Chromium),
-            "opera" => Some(Browser::Opera),
-            "vivaldi" => Some(Browser::Vivaldi),
-            "whale" => Some(Browser::Whale),
             _ => None,
         }
     }
@@ -214,9 +205,6 @@ pub fn detect_browser_macos(home: Option<&std::path::Path>) -> Option<Browser> {
         candidates.push((Browser::Firefox, vec![app_supp.join("Firefox")]));
         candidates.push((Browser::Edge, vec![app_supp.join("Microsoft Edge")]));
         candidates.push((Browser::Chromium, vec![app_supp.join("Chromium")]));
-        candidates.push((Browser::Opera, vec![app_supp.join("com.operasoftware.Opera")]));
-        candidates.push((Browser::Vivaldi, vec![app_supp.join("Vivaldi")]));
-        candidates.push((Browser::Whale, vec![app_supp.join("Naver/Whale")]));
         candidates.push((
             Browser::Safari,
             vec![
@@ -238,9 +226,6 @@ pub fn detect_browser_macos(home: Option<&std::path::Path>) -> Option<Browser> {
         (Browser::Firefox, vec![std::path::PathBuf::from("/Applications/Firefox.app")]),
         (Browser::Edge, vec![std::path::PathBuf::from("/Applications/Microsoft Edge.app")]),
         (Browser::Chromium, vec![std::path::PathBuf::from("/Applications/Chromium.app")]),
-        (Browser::Opera, vec![std::path::PathBuf::from("/Applications/Opera.app")]),
-        (Browser::Vivaldi, vec![std::path::PathBuf::from("/Applications/Vivaldi.app")]),
-        (Browser::Whale, vec![std::path::PathBuf::from("/Applications/Naver Whale.app")]),
         (
             Browser::Safari,
             vec![
@@ -264,9 +249,6 @@ pub fn detect_browser_linux(home: Option<&std::path::Path>) -> Option<Browser> {
         (Browser::Brave, vec![config_dir.join("BraveSoftware/Brave-Browser")]),
         (Browser::Firefox, vec![home.join(".mozilla/firefox")]),
         (Browser::Edge, vec![config_dir.join("microsoft-edge")]),
-        (Browser::Opera, vec![config_dir.join("opera")]),
-        (Browser::Vivaldi, vec![config_dir.join("vivaldi")]),
-        (Browser::Whale, vec![config_dir.join("naver-whale")]),
     ];
 
     detect_browser_from_candidates(&candidates)
@@ -336,9 +318,6 @@ mod tests {
         assert_eq!(Browser::parse("brave"), Some(Browser::Brave));
         assert_eq!(Browser::parse("edge"), Some(Browser::Edge));
         assert_eq!(Browser::parse("chromium"), Some(Browser::Chromium));
-        assert_eq!(Browser::parse("opera"), Some(Browser::Opera));
-        assert_eq!(Browser::parse("vivaldi"), Some(Browser::Vivaldi));
-        assert_eq!(Browser::parse("whale"), Some(Browser::Whale));
 
         assert_eq!(Browser::parse("invalid"), None);
         assert_eq!(Browser::parse(""), None);
@@ -349,9 +328,6 @@ mod tests {
         assert_eq!(Browser::Brave.as_str(), "brave");
         assert_eq!(Browser::Edge.as_str(), "edge");
         assert_eq!(Browser::Chromium.as_str(), "chromium");
-        assert_eq!(Browser::Opera.as_str(), "opera");
-        assert_eq!(Browser::Vivaldi.as_str(), "vivaldi");
-        assert_eq!(Browser::Whale.as_str(), "whale");
 
         assert_eq!(Browser::Firefox.to_string(), "firefox");
         assert_eq!("chrome".parse::<Browser>(), Ok(Browser::Chrome));

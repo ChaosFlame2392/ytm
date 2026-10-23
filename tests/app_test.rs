@@ -191,7 +191,7 @@ fn test_app_stream_error_other_reason_advances_and_sets_message() {
     .unwrap();
 
     assert_eq!(app.queue.cursor, 1);
-    assert!(app.error_message.as_ref().unwrap().contains("[!] Stream Error"));
+    assert!(app.error_message.as_ref().unwrap().contains("[!] Offline"));
 
     responder.join().unwrap();
 }
@@ -297,6 +297,60 @@ fn test_app_stream_error_cleared_on_user_action_and_natural_eof() {
     .unwrap();
     // Error notification must be cleared
     assert!(app.error_message.is_none());
+
+    // Trigger error again
+    app.error_message = Some("[!] Stream Error".to_string());
+    assert!(app.error_message.is_some());
+    // Playback resumes -> clears error notification
+    app.handle_mpv_event(MpvEvent::PlaybackRestart).unwrap();
+    assert!(app.error_message.is_none());
+
+    responder.join().unwrap();
+}
+
+#[test]
+fn test_app_distinguish_offline_from_generic_stream_error() {
+    let (mut app, mut server, _downloaded) = setup_test_app();
+
+    let responder = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(server.try_clone().unwrap());
+
+        // 1. Respond to loadfile on track 1
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let req_id = val["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+
+        // 2. Respond to loadfile on track 2
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let val2: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let req_id2 = val2["request_id"].as_u64().unwrap();
+        server
+            .write_all(format!(r#"{{"request_id":{},"error":"success","data":null}}"#, req_id2).as_bytes())
+            .unwrap();
+        server.write_all(b"\n").unwrap();
+    });
+
+    // Offline error
+    app.handle_mpv_event(MpvEvent::EndFile {
+        reason: EndFileReason::Other("connection refused: offline".to_string()),
+    })
+    .unwrap();
+    assert!(app.error_message.as_ref().unwrap().contains("[!] Offline"));
+
+    // Generic stream error
+    app.handle_mpv_event(MpvEvent::EndFile {
+        reason: EndFileReason::Other("decoder failure".to_string()),
+    })
+    .unwrap();
+    assert!(app.error_message.as_ref().unwrap().contains("[!] Stream Error"));
+    assert!(!app.error_message.as_ref().unwrap().contains("[!] Offline"));
 
     responder.join().unwrap();
 }

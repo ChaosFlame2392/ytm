@@ -89,12 +89,20 @@ impl AudioDownloader for MockFailureDownloader {
     }
 }
 
+fn temp_test_dir(prefix: &str) -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), count));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
 fn create_hermetic_test_app() -> (App, UnixStream) {
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
     let mpv = MpvController::from_stream(client_stream);
 
-    let temp_dir = std::env::temp_dir().join(format!("ytm-hermetic-test-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&temp_dir);
+    let temp_dir = temp_test_dir("ytm-hermetic-test");
     let cache = AudioCache::new(temp_dir);
 
     struct NoOpDownloader;
@@ -109,17 +117,17 @@ fn create_hermetic_test_app() -> (App, UnixStream) {
         Track {
             index: 0,
             id: "stream_fail_0".to_string(),
-            title: "Failing Stream Song".to_string(),
+            title: "Failing Stream Track".to_string(),
         },
         Track {
             index: 1,
             id: "stream_ok_1".to_string(),
-            title: "Backup Stream Song".to_string(),
+            title: "Backup Stream Track".to_string(),
         },
         Track {
             index: 2,
             id: "stream_ok_2".to_string(),
-            title: "Final Stream Song".to_string(),
+            title: "Final Stream Track".to_string(),
         },
     ];
     let queue = Queue::new(tracks);
@@ -177,9 +185,7 @@ fn test_hermetic_stream_error_handling_and_auto_advance() {
 
 #[test]
 fn test_hermetic_prefetch_bot_verification_and_http_403_resilience() {
-    let temp_dir = std::env::temp_dir().join(format!("ytm-hermetic-prefetch-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&temp_dir);
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = temp_test_dir("ytm-hermetic-prefetch");
 
     let cache = AudioCache::new(temp_dir.clone());
     let attempts = Arc::new(Mutex::new(Vec::new()));
@@ -218,29 +224,43 @@ fn test_hermetic_prefetch_bot_verification_and_http_403_resilience() {
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
-#[test]
-fn test_hermetic_cookie_resolution_and_command_configuration() {
+fn assert_command_args(
+    source: Option<&CookieSource>,
+    expected_ytdlp: &[&str],
+    expected_mpv: &[&str],
+) {
     use std::process::Command;
 
+    let yt_cmd = build_ytdlp_command_with_cookies(source);
+    let yt_args: Vec<String> = yt_cmd
+        .get_args()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(yt_args, expected_ytdlp);
+
+    let mut mpv_cmd = Command::new("mpv");
+    configure_mpv_command_with_cookies(&mut mpv_cmd, source);
+    let mpv_args: Vec<String> = mpv_cmd
+        .get_args()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(mpv_args, expected_mpv);
+}
+
+#[test]
+fn test_hermetic_cookie_resolution_and_command_configuration() {
     // 1. File cookie source formatting
     let cookie_file = PathBuf::from("/etc/ytm/cookies.txt");
-    let file_src = CookieSource::File(cookie_file.clone());
+    let file_src = CookieSource::File(cookie_file);
     assert_eq!(file_src.ytdlp_args(), vec!["--cookies", "/etc/ytm/cookies.txt"]);
     assert_eq!(
         file_src.mpv_arg(),
         "--ytdl-raw-options=cookies=/etc/ytm/cookies.txt"
     );
-
-    let yt_cmd = build_ytdlp_command_with_cookies(Some(&file_src));
-    let args: Vec<String> = yt_cmd.get_args().map(|s| s.to_string_lossy().into_owned()).collect();
-    assert_eq!(args, vec!["--no-warnings", "--cookies", "/etc/ytm/cookies.txt"]);
-
-    let mut mpv_cmd = Command::new("mpv");
-    configure_mpv_command_with_cookies(&mut mpv_cmd, Some(&file_src));
-    let mpv_args: Vec<String> = mpv_cmd.get_args().map(|s| s.to_string_lossy().into_owned()).collect();
-    assert_eq!(
-        mpv_args,
-        vec!["--ytdl-raw-options=cookies=/etc/ytm/cookies.txt"]
+    assert_command_args(
+        Some(&file_src),
+        &["--no-warnings", "--cookies", "/etc/ytm/cookies.txt"],
+        &["--ytdl-raw-options=cookies=/etc/ytm/cookies.txt"],
     );
 
     // 2. Browser cookie source formatting
@@ -250,24 +270,14 @@ fn test_hermetic_cookie_resolution_and_command_configuration() {
         browser_src.mpv_arg(),
         "--ytdl-raw-options=cookies-from-browser=chrome"
     );
-
-    let yt_browser_cmd = build_ytdlp_command_with_cookies(Some(&browser_src));
-    let yt_browser_args: Vec<String> = yt_browser_cmd
-        .get_args()
-        .map(|s| s.to_string_lossy().into_owned())
-        .collect();
-    assert_eq!(
-        yt_browser_args,
-        vec!["--no-warnings", "--cookies-from-browser", "chrome"]
+    assert_command_args(
+        Some(&browser_src),
+        &["--no-warnings", "--cookies-from-browser", "chrome"],
+        &["--ytdl-raw-options=cookies-from-browser=chrome"],
     );
 
     // 3. None cookie source
-    let yt_none_cmd = build_ytdlp_command_with_cookies(None);
-    let yt_none_args: Vec<String> = yt_none_cmd
-        .get_args()
-        .map(|s| s.to_string_lossy().into_owned())
-        .collect();
-    assert_eq!(yt_none_args, vec!["--no-warnings"]);
+    assert_command_args(None, &["--no-warnings"], &[]);
 
     // 4. Hierarchy resolution verification:
     // Env file override takes precedence over env browser, config path, and auto-detect
@@ -323,9 +333,7 @@ fn test_hermetic_cookie_resolution_and_command_configuration() {
 
 #[test]
 fn test_hermetic_stream_resolution_cached_vs_remote() {
-    let temp_dir = std::env::temp_dir().join(format!("ytm-hermetic-source-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&temp_dir);
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = temp_test_dir("ytm-hermetic-source");
 
     let cache = AudioCache::new(temp_dir.clone());
 
