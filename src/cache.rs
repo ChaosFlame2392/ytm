@@ -31,6 +31,59 @@ impl AudioSource {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CookieSource {
+    Browser(String),
+    File(PathBuf),
+}
+
+impl CookieSource {
+    /// Resolves cookie source from environment variables, cache directory, or platform defaults.
+    pub fn resolve() -> Option<Self> {
+        if let Ok(file) = std::env::var("YTM_COOKIES_FILE") {
+            let path = PathBuf::from(file);
+            if path.is_file() {
+                return Some(CookieSource::File(path));
+            }
+        }
+        if let Ok(browser) = std::env::var("YTM_COOKIES_FROM_BROWSER") {
+            let trimmed = browser.trim();
+            if !trimmed.is_empty() {
+                return Some(CookieSource::Browser(trimmed.to_string()));
+            }
+        }
+        let cache_cookies = default_cache_dir().join("cookies.txt");
+        if cache_cookies.is_file() {
+            return Some(CookieSource::File(cache_cookies));
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            Some(CookieSource::Browser("safari".to_string()))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
+
+    /// Returns the arguments to pass to yt-dlp CLI
+    pub fn ytdlp_args(&self) -> Vec<String> {
+        match self {
+            CookieSource::Browser(browser) => vec!["--cookies-from-browser".to_string(), browser.clone()],
+            CookieSource::File(path) => vec!["--cookies".to_string(), path.to_string_lossy().into_owned()],
+        }
+    }
+
+    /// Returns the mpv raw ytdl option argument
+    pub fn mpv_arg(&self) -> String {
+        match self {
+            CookieSource::Browser(browser) => format!("--ytdl-raw-options=cookies-from-browser={}", browser),
+            CookieSource::File(path) => format!("--ytdl-raw-options=cookies={}", path.to_string_lossy()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AudioCache {
     pub audio_dir: PathBuf,
@@ -341,6 +394,29 @@ mod tests {
         assert!(!source_remote.is_local());
         assert_eq!(source_remote.as_str(), &remote_url);
         assert_eq!(source_remote.into_string(), remote_url);
+    }
+
+    #[test]
+    fn test_cookie_source_formatting_and_args() {
+        let browser_cookie = CookieSource::Browser("firefox".to_string());
+        assert_eq!(
+            browser_cookie.ytdlp_args(),
+            vec!["--cookies-from-browser", "firefox"]
+        );
+        assert_eq!(
+            browser_cookie.mpv_arg(),
+            "--ytdl-raw-options=cookies-from-browser=firefox"
+        );
+
+        let file_cookie = CookieSource::File(PathBuf::from("/tmp/cookies.txt"));
+        assert_eq!(
+            file_cookie.ytdlp_args(),
+            vec!["--cookies", "/tmp/cookies.txt"]
+        );
+        assert_eq!(
+            file_cookie.mpv_arg(),
+            "--ytdl-raw-options=cookies=/tmp/cookies.txt"
+        );
     }
 }
 

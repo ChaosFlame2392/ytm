@@ -397,6 +397,9 @@ impl MpvController {
             .arg("--really-quiet")
             .arg("--idle")
             .arg(format!("--input-ipc-server={}", path.display()));
+        if let Some(cookies) = crate::cache::CookieSource::resolve() {
+            cmd.arg(cookies.mpv_arg());
+        }
         if cfg!(test) {
             cmd.arg("--ao=null");
         }

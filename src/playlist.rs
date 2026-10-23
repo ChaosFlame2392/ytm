@@ -149,14 +149,18 @@ impl PlaylistManager {
 
 /// Executes yt-dlp to extract track IDs and titles from a playlist URL.
 pub fn run_ytdlp_extraction(url: &str) -> Result<String, String> {
-    let output = std::process::Command::new("yt-dlp")
-        .args([
-            "--no-warnings",
-            "--flat-playlist",
-            "--print",
-            "%(id)s\t%(title)s",
-            url,
-        ])
+    let mut cmd = std::process::Command::new("yt-dlp");
+    cmd.args([
+        "--no-warnings",
+        "--flat-playlist",
+        "--print",
+        "%(id)s\t%(title)s",
+    ]);
+    if let Some(cookies) = crate::cache::CookieSource::resolve() {
+        cmd.args(cookies.ytdlp_args());
+    }
+    cmd.arg(url);
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to execute yt-dlp: {}", e))?;
 

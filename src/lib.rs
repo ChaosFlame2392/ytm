@@ -9,7 +9,7 @@ pub mod ui;
 pub use app::App;
 
 pub use cache::{
-    default_cache_dir, AudioCache, AudioSource, PruneReport, DEFAULT_MAX_CACHE_BYTES,
+    default_cache_dir, AudioCache, AudioSource, CookieSource, PruneReport, DEFAULT_MAX_CACHE_BYTES,
     DEFAULT_TARGET_CACHE_BYTES,
 };
 pub use mpv::{
