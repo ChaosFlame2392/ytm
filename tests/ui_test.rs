@@ -630,7 +630,7 @@ fn test_modal_rendering_with_selection_indicators() {
     modal.toggle_selection(0);
     modal.toggle_selection(2);
 
-    let lines = format_modal_lines(&rect, &modal, &queue, None);
+    let lines = format_modal_lines(&rect, &modal, &queue, None, None);
     // Line 1: Track 0 is active (▶) AND selected ([x])
     assert!(lines[1].contains("[x]"), "Track 0 should show [x]");
     assert!(lines[1].contains("Track Zero"));
@@ -646,7 +646,7 @@ fn test_modal_rendering_with_selection_indicators() {
 
     // Clear selections and re-render
     modal.clear_selection();
-    let lines_cleared = format_modal_lines(&rect, &modal, &queue, None);
+    let lines_cleared = format_modal_lines(&rect, &modal, &queue, None, None);
     assert!(lines_cleared[1].contains("[ ]"), "Track 0 should show [ ] after clear");
     assert!(lines_cleared[2].contains("[ ]"), "Track 1 should show [ ] after clear");
     assert!(lines_cleared[3].contains("[ ]"), "Track 2 should show [ ] after clear");
@@ -677,7 +677,7 @@ fn test_modal_border_and_content_rendering_in_memory() {
     modal.open(0, 5, rect.content_height());
 
     let mut buf = Vec::new();
-    render_floating_modal(&mut buf, &rect, &modal, &queue, None).unwrap();
+    render_floating_modal(&mut buf, &rect, &modal, &queue, None, None).unwrap();
     let rendered = String::from_utf8(buf).unwrap();
 
     // Verify rounded borders
@@ -720,7 +720,7 @@ fn test_modal_border_and_content_rendering_in_memory() {
     assert_eq!(modal.viewer_cursor, 2);
 
     let mut buf2 = Vec::new();
-    render_floating_modal(&mut buf2, &rect, &modal, &queue, None).unwrap();
+    render_floating_modal(&mut buf2, &rect, &modal, &queue, None, None).unwrap();
     let rendered2 = String::from_utf8(buf2).unwrap();
 
     assert!(
@@ -746,7 +746,7 @@ fn test_modal_empty_queue_rendering() {
     modal.open(0, 0, rect.content_height());
 
     let mut buf = Vec::new();
-    render_floating_modal(&mut buf, &rect, &modal, &queue, None).unwrap();
+    render_floating_modal(&mut buf, &rect, &modal, &queue, None, None).unwrap();
     let rendered = String::from_utf8(buf).unwrap();
 
     assert!(rendered.contains("[0/0]"), "Position badge should show [0/0]");
@@ -799,7 +799,7 @@ fn test_format_modal_lines_structure() {
     let mut modal = ModalState::default();
     modal.open(0, 2, rect.content_height());
 
-    let lines = format_modal_lines(&rect, &modal, &queue, None);
+    let lines = format_modal_lines(&rect, &modal, &queue, None, None);
     assert_eq!(lines.len(), 4);
     assert!(lines[0].starts_with('╭'));
     assert!(lines[0].ends_with('╮'));
@@ -1028,7 +1028,7 @@ fn test_modal_search_rendering_prompt_and_no_matching_tracks() {
     }
 
     let mut buf = Vec::new();
-    render_floating_modal(&mut buf, &rect, &modal, &queue, None).unwrap();
+    render_floating_modal(&mut buf, &rect, &modal, &queue, None, None).unwrap();
     let rendered = String::from_utf8(buf).unwrap();
 
     // Verify search prompt line is visible
@@ -1041,7 +1041,7 @@ fn test_modal_search_rendering_prompt_and_no_matching_tracks() {
     // 2. Search with query matching nothing -> shows [No matching tracks]
     modal.append_search_char('x', &queue, rect.content_height());
     let mut buf2 = Vec::new();
-    render_floating_modal(&mut buf2, &rect, &modal, &queue, None).unwrap();
+    render_floating_modal(&mut buf2, &rect, &modal, &queue, None, None).unwrap();
     let rendered2 = String::from_utf8(buf2).unwrap();
 
     assert!(rendered2.contains("Search: Betax"));
@@ -1116,7 +1116,7 @@ fn test_modal_cache_indicator_rendering() {
     modal.open(0, 2, rect.content_height());
 
     // 1. Browsing mode: verify [⚡] displayed on cached track
-    let lines = format_modal_lines(&rect, &modal, &queue, Some(&cache));
+    let lines = format_modal_lines(&rect, &modal, &queue, Some(&cache), None);
     assert_eq!(lines.len(), 4);
     assert!(lines[1].contains("[⚡]"), "Line 1 (cached track) must display [⚡]");
     assert!(lines[1].contains("Cached Track"));
@@ -1125,14 +1125,14 @@ fn test_modal_cache_indicator_rendering() {
 
     // 2. Search mode: verify [⚡] displayed on cached track
     modal.start_search(&queue);
-    let search_lines = format_modal_lines(&rect, &modal, &queue, Some(&cache));
+    let search_lines = format_modal_lines(&rect, &modal, &queue, Some(&cache), None);
     // Line 0 is top border, line 1 is search input prompt, line 2 is first match (cached), line 3 is bottom border
     assert!(search_lines[2].contains("[⚡]"), "Search match for cached track must display [⚡]");
     assert!(search_lines[2].contains("Cached Track"));
 
     // Filter to streaming track only
     modal.append_search_char('S', &queue, rect.content_height());
-    let stream_search_lines = format_modal_lines(&rect, &modal, &queue, Some(&cache));
+    let stream_search_lines = format_modal_lines(&rect, &modal, &queue, Some(&cache), None);
     assert!(!stream_search_lines[2].contains("[⚡]"), "Search match for uncached track must NOT display [⚡]");
     assert!(stream_search_lines[2].contains("Streaming Track"));
 
@@ -1140,28 +1140,92 @@ fn test_modal_cache_indicator_rendering() {
 }
 
 #[test]
+fn test_modal_failed_track_indicator_rendering() {
+    use std::collections::HashSet;
+
+    let tracks = vec![
+        Track { index: 0, id: "fail_0".into(), title: "Broken Track".into() },
+        Track { index: 1, id: "ok_1".into(), title: "Healthy Track".into() },
+    ];
+    let queue = Queue::new(tracks);
+    let rect = ModalRect {
+        x: 0,
+        y: 0,
+        width: 50,
+        height: 4,
+    };
+    let mut modal = ModalState::default();
+    modal.open(0, 2, rect.content_height());
+
+    let mut failed = HashSet::new();
+    failed.insert("fail_0".to_string());
+
+    // 1. Browsing mode: verify [!] displayed on failed track
+    let lines = format_modal_lines(&rect, &modal, &queue, None, Some(&failed));
+    assert_eq!(lines.len(), 4);
+    assert!(lines[1].contains("[!]"), "Line 1 (failed track) must display [!]");
+    assert!(lines[1].contains('!'), "Line 1 must contain error indicator !");
+    assert!(lines[1].contains("Broken Track"));
+    assert!(!lines[2].contains("[!]"), "Line 2 (healthy track) must NOT display [!]");
+    assert!(lines[2].contains("Healthy Track"));
+
+    // 2. Search mode: verify [!] displayed on failed track
+    modal.start_search(&queue);
+    let search_lines = format_modal_lines(&rect, &modal, &queue, None, Some(&failed));
+    assert!(search_lines[2].contains("[!]"), "Search match for failed track must display [!]");
+    assert!(search_lines[2].contains("Broken Track"));
+}
+
+#[test]
 fn test_format_modal_row_helper() {
-    // 1. Cursor inactive, unselected, uncached
-    let row1 = format_modal_row(0, "Simple Track", false, false, false, false, 30);
+    // 1. Cursor inactive, unselected, uncached, not failed
+    let row1 = format_modal_row(0, "Simple Track", false, false, false, false, false, 30);
     assert_eq!(row1.chars().count(), 32); // 30 content + 2 border chars '│'
     assert!(row1.starts_with("│   [ ]   1. Simple Track"));
     assert!(row1.ends_with('│'));
     assert!(!row1.contains("\x1b[7m"));
     assert!(!row1.contains("[⚡]"));
+    assert!(!row1.contains("[!]"));
 
-    // 2. Cursor active (highlighted), selected, cached
-    let row2 = format_modal_row(1, "Highlighted Cached", true, true, true, true, 35);
+    // 2. Cursor active (highlighted), selected, cached, not failed
+    let row2 = format_modal_row(1, "Highlighted Cached", true, true, true, false, true, 35);
     assert!(row2.contains("\x1b[7m"), "Must include ANSI reverse video for cursor highlight");
     assert!(row2.contains('▶'), "Must include active playback marker");
     assert!(row2.contains("[x]"), "Must include selection marker");
     assert!(row2.contains("[⚡]"), "Must include cache badge");
+    assert!(!row2.contains("[!]"));
     assert!(row2.contains("Highlighted Cached"));
 
-    // 3. Truncation when title exceeds content_width
+    // 3. Failed unplayable track: shows error indicator [!]
+    let row_failed = format_modal_row(2, "Failed Track", false, false, false, true, false, 30);
+    assert!(row_failed.contains("[!]"), "Must include error badge [!]");
+    assert!(row_failed.contains('!'), "Must include !");
+    assert!(!row_failed.contains("[⚡]"));
+    assert!(row_failed.contains("Failed Track"));
+
+    // 4. Truncation when title exceeds content_width
     let long_title = "This is a remarkably long track title that will definitely exceed the boundary";
-    let row3 = format_modal_row(2, long_title, false, false, false, false, 25);
+    let row3 = format_modal_row(3, long_title, false, false, false, false, false, 25);
     assert!(row3.contains('…'), "Must truncate with ellipsis");
     assert_eq!(row3.chars().count(), 27); // 25 content + 2 border chars
+}
+
+#[test]
+fn test_format_line2_with_error_status_state() {
+    use ytm::ui::format_line2_with_error;
+
+    let state = StatusState {
+        shuffle: true,
+        single_loop: false,
+        next_title: Some("Next Song Title"),
+        error_message: Some("[!] Offline"),
+        ..Default::default()
+    };
+    let formatted = format_line2_with_error(&state);
+    assert!(formatted.contains("[Shuffle: ON]"));
+    assert!(formatted.contains("[Loop: OFF]"));
+    assert!(formatted.contains("[!] Offline"));
+    assert!(formatted.contains("Next: Next Song Title"));
 }
 
 

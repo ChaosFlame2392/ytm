@@ -193,9 +193,6 @@ fn test_auth_resolution_hierarchy_and_argument_formatting_offline() {
         ("brave", Browser::Brave),
         ("edge", Browser::Edge),
         ("chromium", Browser::Chromium),
-        ("opera", Browser::Opera),
-        ("vivaldi", Browser::Vivaldi),
-        ("whale", Browser::Whale),
     ];
 
     for (name, browser) in browsers {

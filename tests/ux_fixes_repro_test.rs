@@ -105,6 +105,7 @@ fn test_repro_cjk_modal_row_display_width() {
         false,
         true,
         false,
+        false,
         content_width,
     );
     let clean = strip_ansi(&row);

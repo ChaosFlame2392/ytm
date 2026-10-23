@@ -67,6 +67,29 @@ impl Queue {
         self.current_track()
     }
 
+    /// Advances to the next track in playback order satisfying the given predicate,
+    /// checking up to all items in the queue.
+    /// Returns the matching track, or `None` if no tracks match.
+    pub fn skip_next_matching<F>(&mut self, mut predicate: F) -> Option<&Track>
+    where
+        F: FnMut(&Track) -> bool,
+    {
+        if self.playback_order.is_empty() {
+            return None;
+        }
+        let total = self.playback_order.len();
+        let start_cursor = self.cursor;
+        for _ in 0..total {
+            if let Some(track) = self.skip_next() {
+                if predicate(track) {
+                    return self.current_track();
+                }
+            }
+        }
+        self.cursor = start_cursor;
+        None
+    }
+
     /// Advances playback for natural track completion (EOF).
     /// If `single_loop` is enabled, repeats the current track without advancing.
     /// Otherwise, advances to the next track in playback order.
@@ -447,5 +470,31 @@ mod tests {
         // Upcoming must be [5, 0, 1]!
         assert_eq!(queue3.playback_order, vec![2, 3, 4, 5, 0, 1]);
         assert_eq!(queue3.peek_next().unwrap().id, "video_5");
+    }
+
+    #[test]
+    fn test_skip_next_matching() {
+        let tracks = sample_tracks(4);
+        let mut queue = Queue::new(tracks);
+        assert_eq!(queue.cursor, 0);
+
+        // Match track with id "video_2": advances past video_1 to video_2
+        let matched = queue.skip_next_matching(|t| t.id == "video_2");
+        assert_eq!(matched.map(|t| t.id.as_str()), Some("video_2"));
+        assert_eq!(queue.cursor, 2);
+
+        // Match with condition that only matches video_0 (wraps around)
+        let wrapped = queue.skip_next_matching(|t| t.id == "video_0");
+        assert_eq!(wrapped.map(|t| t.id.as_str()), Some("video_0"));
+        assert_eq!(queue.cursor, 0);
+
+        // When predicate matches nothing: returns None and restores cursor
+        let none = queue.skip_next_matching(|t| t.id == "nonexistent");
+        assert_eq!(none, None);
+        assert_eq!(queue.cursor, 0);
+
+        // Empty queue
+        let mut empty = Queue::default();
+        assert_eq!(empty.skip_next_matching(|_| true), None);
     }
 }

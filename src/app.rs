@@ -101,6 +101,7 @@ impl App {
         match action {
             KeyAction::TogglePause => {
                 self.playback_started = true;
+                self.error_message = None;
                 self.mpv.toggle_pause()?;
             }
             KeyAction::NextTrack => {
@@ -241,15 +242,42 @@ impl App {
     pub fn render_modal<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let rect = calculate_modal_rect(cols, rows);
-        render_floating_modal(writer, &rect, &self.modal, &self.queue, Some(&self.cache))
+        render_floating_modal(
+            writer,
+            &rect,
+            &self.modal,
+            &self.queue,
+            Some(&self.cache),
+            Some(&self.failed_tracks),
+        )
     }
 
     /// Handles a stream or decode error from playback backend.
     /// Sets transient error message, marks track as failed, and advances to next track if available.
     pub fn handle_stream_error(&mut self, detail: Option<&str>) -> Result<(), MpvError> {
-        let msg = match detail {
-            Some(d) if !d.is_empty() => format!("[!] Stream Error: {}", d),
-            _ => "[!] Stream Error".to_string(),
+        let is_offline = if let Some(d) = detail {
+            let lower = d.to_lowercase();
+            lower.contains("offline")
+                || lower.contains("network")
+                || lower.contains("connection")
+                || lower.contains("resolve")
+                || lower.contains("timeout")
+                || lower.contains("unreachable")
+                || lower.contains("disconnected")
+        } else {
+            false
+        };
+
+        let msg = if is_offline {
+            match detail {
+                Some(d) if !d.is_empty() => format!("[!] Offline: {}", d),
+                _ => "[!] Offline".to_string(),
+            }
+        } else {
+            match detail {
+                Some(d) if !d.is_empty() => format!("[!] Stream Error: {}", d),
+                _ => "[!] Stream Error".to_string(),
+            }
         };
         self.error_message = Some(msg);
 
@@ -257,18 +285,11 @@ impl App {
             self.failed_tracks.insert(track.id.clone());
         }
 
-        let total_tracks = self.queue.playback_order.len();
-        let mut advanced = false;
-        for _ in 0..total_tracks {
-            if let Some(next_track) = self.queue.skip_next() {
-                if !self.failed_tracks.contains(&next_track.id) {
-                    advanced = true;
-                    break;
-                }
-            }
-        }
-
-        if advanced {
+        if self
+            .queue
+            .skip_next_matching(|track| !self.failed_tracks.contains(&track.id))
+            .is_some()
+        {
             self.play_current()?;
         }
 
@@ -295,6 +316,9 @@ impl App {
                 reason: EndFileReason::Other(ref msg),
             } => {
                 self.handle_stream_error(Some(msg.as_str()))?;
+            }
+            MpvEvent::PlaybackRestart => {
+                self.error_message = None;
             }
             _ => {}
         }
